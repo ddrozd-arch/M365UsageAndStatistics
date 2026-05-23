@@ -1,0 +1,198 @@
+Masz rację, Dawid — nie pojawił się żaden link, bo… w tej platformie nie mogę generować ani wysyłać plików ZIP.
+To ograniczenie środowiska, nie Twoje ani mojego kodu.
+
+👉 Ale mogę wygenerować cały projekt tak, żebyś mógł go jednym kliknięciem wkleić do folderu i sam spakować ZIP-em.
+Dostaniesz pełną strukturę katalogów + wszystkie pliki w jednym miejscu.
+
+---
+
+🟦 Gotowy projekt: MessageTraceDownloader (.NET 8)
+
+Skopiuj to do folderu MessageTraceDownloader/ i spakuj ZIP-em u siebie.
+
+---
+
+📁 MessageTraceDownloader/Program.cs
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using System.Net.Http.Headers;
+using System.Text.Json.Nodes;
+
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.Services.AddHttpClient<GraphMessageTraceClient>(client =>
+{
+    client.DefaultRequestHeaders.Authorization =
+        new AuthenticationHeaderValue("Bearer", "<ACCESS_TOKEN>");
+});
+
+builder.Services.AddSingleton<TimeWindowWorker>();
+builder.Services.AddSingleton<MessageTraceOrchestrator>();
+
+var app = builder.Build();
+
+var orchestrator = app.Services.GetRequiredService<MessageTraceOrchestrator>();
+var day = DateTime.UtcNow.AddDays(-1).Date;
+var all = await orchestrator.DownloadDayAsync(day);
+
+Console.WriteLine($"Pobrano {all.Count} rekordów");
+
+
+---
+
+📁 MessageTraceDownloader/GraphRateLimiter.cs
+
+using System.Threading.RateLimiting;
+
+public static class GraphRateLimiter
+{
+    public static readonly RateLimiter Limiter = new FixedWindowRateLimiter(
+        new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 100,
+            Window = TimeSpan.FromMinutes(5),
+            QueueLimit = 200,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+        });
+}
+
+
+---
+
+📁 MessageTraceDownloader/GraphMessageTraceClient.cs
+
+using System.Net;
+using System.Text.Json.Nodes;
+
+public class GraphMessageTraceClient
+{
+    private readonly HttpClient _http;
+
+    public GraphMessageTraceClient(HttpClient http)
+    {
+        _http = http;
+    }
+
+    public async IAsyncEnumerable<JsonNode> GetMessageTraceWindowAsync(DateTime start, DateTime end)
+    {
+        var url = $"https://graph.microsoft.com/beta/admin/exchange/tracing/messageTraces" +
+                  $"?$filter=receivedDateTime ge {start:O} and receivedDateTime le {end:O}";
+
+        while (url != null)
+        {
+            using var lease = await GraphRateLimiter.Limiter.AcquireAsync(1);
+
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            var res = await _http.SendAsync(req);
+
+            if (res.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                await Task.Delay(5000);
+                continue;
+            }
+
+            res.EnsureSuccessStatusCode();
+
+            var json = JsonNode.Parse(await res.Content.ReadAsStringAsync());
+            var values = json?["value"]?.AsArray();
+
+            if (values != null)
+            {
+                foreach (var item in values)
+                    yield return item!;
+            }
+
+            url = json?["@odata.nextLink"]?.ToString();
+        }
+    }
+}
+
+
+---
+
+📁 MessageTraceDownloader/TimeWindowWorker.cs
+
+using System.Text.Json.Nodes;
+
+public class TimeWindowWorker
+{
+    private readonly GraphMessageTraceClient _client;
+
+    public TimeWindowWorker(GraphMessageTraceClient client)
+    {
+        _client = client;
+    }
+
+    public async Task<List<JsonNode>> ProcessWindowAsync(DateTime start, DateTime end)
+    {
+        var list = new List<JsonNode>();
+
+        await foreach (var item in _client.GetMessageTraceWindowAsync(start, end))
+            list.Add(item);
+
+        return list;
+    }
+}
+
+
+---
+
+📁 MessageTraceDownloader/MessageTraceOrchestrator.cs
+
+using System.Collections.Concurrent;
+using System.Text.Json.Nodes;
+
+public class MessageTraceOrchestrator
+{
+    private readonly TimeWindowWorker _worker;
+
+    public MessageTraceOrchestrator(TimeWindowWorker worker)
+    {
+        _worker = worker;
+    }
+
+    public async Task<List<JsonNode>> DownloadDayAsync(DateTime day)
+    {
+        var results = new ConcurrentBag<JsonNode>();
+
+        var windows = Enumerable.Range(0, 24)
+            .Select(h => (
+                Start: new DateTime(day.Year, day.Month, day.Day, h, 0, 0, DateTimeKind.Utc),
+                End:   new DateTime(day.Year, day.Month, day.Day, h, 59, 59, DateTimeKind.Utc)
+            ));
+
+        await Parallel.ForEachAsync(
+            windows,
+            new ParallelOptions { MaxDegreeOfParallelism = 4 },
+            async (win, ct) =>
+            {
+                var data = await _worker.ProcessWindowAsync(win.Start, win.End);
+                foreach (var item in data)
+                    results.Add(item);
+            });
+
+        return results.ToList();
+    }
+}
+
+
+---
+
+🟦 Chcesz, żebym przygotował też:
+
+• plik .csproj
+• wersję z HostedService
+• wersję z zapisem JSON/CSV
+• wersję z dynamicznymi oknami czasowymi
+
+
+Wybierz jedną z opcji:
+
+• Dodaj plik csproj
+• Dodaj HostedService
+• Dodaj zapis JSON CSV
+• Dodaj dynamiczne okna
+
+
+Powiedz tylko, co dorzucić.
