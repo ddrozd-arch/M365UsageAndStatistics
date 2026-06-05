@@ -1,0 +1,244 @@
+Poniżej masz pełne, gotowe do kopiuj‑wklej podsumowanie całego rozwiązania:
+✔ Windows Authentication
+✔ wiele baz z appsettings
+✔ mapowanie prefix → tabela
+✔ obsługa plików z datą w nazwie
+✔ import CSV → SQL
+✔ walidacja liczby wierszy
+✔ logowanie
+
+To jest jedna, kompletna, spójna wersja, którą możesz wkleić do projektu.
+
+---
+
+📌 appsettings.json (copy‑paste)
+
+{
+  "DatabaseConfig": {
+    "Server": "SQL01.domain.local",
+    "Databases": [
+      "DB_Import1",
+      "DB_Import2",
+      "DB_Import3"
+    ],
+    "FilePrefixMap": {
+      "customers_": "dbo.ImportCustomers",
+      "orders_": "dbo.ImportOrders",
+      "products_": "dbo.ImportProducts"
+    }
+  }
+}
+
+
+Zasada:
+Jeśli plik zaczyna się od customers_, to trafia do dbo.ImportCustomers.
+Suffix (np. _20240605_1200.csv) jest ignorowany.
+
+---
+
+📌 FileImportService.cs (copy‑paste)
+
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.IO;
+using System.Linq;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+public class FileImportService
+{
+    private readonly string _server;
+    private readonly List<string> _databases;
+    private readonly Dictionary<string, string> _filePrefixMap;
+    private readonly ILogger<FileImportService> _logger;
+
+    public FileImportService(IConfiguration config, ILogger<FileImportService> logger)
+    {
+        _logger = logger;
+
+        _server = config["DatabaseConfig:Server"]
+            ?? throw new Exception("Brak konfiguracji DatabaseConfig:Server");
+
+        _databases = config.GetSection("DatabaseConfig:Databases")
+            .Get<List<string>>() 
+            ?? throw new Exception("Brak listy baz w DatabaseConfig:Databases");
+
+        _filePrefixMap = config.GetSection("DatabaseConfig:FilePrefixMap")
+            .Get<Dictionary<string, string>>() 
+            ?? throw new Exception("Brak mapy prefixów w DatabaseConfig:FilePrefixMap");
+    }
+
+    // ------------------------------
+    // Budowanie connection string
+    // ------------------------------
+    private string BuildConnectionString(string database)
+    {
+        return $"Server={_server};Database={database};Integrated Security=True;TrustServerCertificate=True;";
+    }
+
+    // ------------------------------
+    // Pobranie plików z dzisiejszą datą
+    // ------------------------------
+    public List<string> GetTodayFiles(string folderPath)
+    {
+        var today = DateTime.Today;
+
+        return Directory
+            .EnumerateFiles(folderPath, "*.csv")
+            .Where(f => File.GetLastWriteTime(f).Date == today)
+            .ToList();
+    }
+
+    // ------------------------------
+    // Dopasowanie pliku do tabeli po prefixie
+    // ------------------------------
+    private string? ResolveTableForFile(string filePath)
+    {
+        string fileName = Path.GetFileName(filePath).ToLower();
+
+        foreach (var kvp in _filePrefixMap)
+        {
+            if (fileName.StartsWith(kvp.Key.ToLower()))
+                return kvp.Value;
+        }
+
+        return null;
+    }
+
+    // ------------------------------
+    // Import CSV → SQL + walidacja
+    // ------------------------------
+    public void ImportCsvToDatabase(string filePath, string databaseName)
+    {
+        if (!_databases.Contains(databaseName))
+        {
+            _logger.LogError($"Baza {databaseName} nie istnieje w konfiguracji.");
+            return;
+        }
+
+        var tableName = ResolveTableForFile(filePath);
+
+        if (tableName == null)
+        {
+            _logger.LogWarning($"Brak mapowania prefixu dla pliku {filePath}");
+            return;
+        }
+
+        string connString = BuildConnectionString(databaseName);
+
+        try
+        {
+            _logger.LogInformation($"Start importu pliku: {filePath} → {databaseName}.{tableName}");
+
+            int before = GetRowCount(connString, tableName);
+            int fileRows = File.ReadLines(filePath).Count() - 1;
+
+            BulkInsert(connString, filePath, tableName);
+
+            int after = GetRowCount(connString, tableName);
+            int diff = after - before;
+
+            if (diff == fileRows)
+            {
+                _logger.LogInformation($"✔ OK: Dodano {diff} wierszy do {tableName} w {databaseName}");
+            }
+            else
+            {
+                _logger.LogError($"❌ BŁĄD: różnica ({diff}) ≠ wiersze w pliku ({fileRows})");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Błąd importu pliku {filePath} do {databaseName}.{tableName}");
+        }
+    }
+
+    // ------------------------------
+    // Liczenie wierszy
+    // ------------------------------
+    private int GetRowCount(string connString, string tableName)
+    {
+        using var conn = new SqlConnection(connString);
+        using var cmd = new SqlCommand($"SELECT COUNT(*) FROM {tableName}", conn);
+
+        conn.Open();
+        return (int)cmd.ExecuteScalar();
+    }
+
+    // ------------------------------
+    // Bulk insert CSV → SQL
+    // ------------------------------
+    private void BulkInsert(string connString, string filePath, string tableName)
+    {
+        using var reader = new StreamReader(filePath);
+        using var conn = new SqlConnection(connString);
+        using var bulk = new SqlBulkCopy(conn)
+        {
+            DestinationTableName = tableName,
+            BatchSize = 5000
+        };
+
+        conn.Open();
+
+        string header = reader.ReadLine();
+        var columns = header.Split(',');
+
+        foreach (var col in columns)
+            bulk.ColumnMappings.Add(col, col);
+
+        var dt = new DataTable();
+        foreach (var col in columns)
+            dt.Columns.Add(col);
+
+        while (!reader.EndOfStream)
+        {
+            var line = reader.ReadLine();
+            dt.Rows.Add(line.Split(','));
+        }
+
+        bulk.WriteToServer(dt);
+    }
+}
+
+
+---
+
+📌 Przykład użycia (copy‑paste)
+
+var files = service.GetTodayFiles(@"C:\Import");
+
+foreach (var file in files)
+{
+    service.ImportCsvToDatabase(
+        filePath: file,
+        databaseName: "DB_Import1"
+    );
+}
+
+
+---
+
+📌 To rozwiązanie obsługuje:
+
+• ✔ wiele baz
+• ✔ mapowanie prefixów plików
+• ✔ suffixy z datą/czasem
+• ✔ import CSV
+• ✔ walidację liczby wierszy
+• ✔ logowanie
+• ✔ Windows Authentication
+
+
+---
+
+Jeśli chcesz, mogę teraz wygenerować:
+
+• pełny Worker Service .NET 8
+• harmonogram (cron)
+• logowanie do pliku
+• retry + obsługę błędów
+
+
+Powiedz tylko, co dalej rozwijamy.
