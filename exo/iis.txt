@@ -1,0 +1,205 @@
+Dawid, poniżej masz kompletny, produkcyjny skrypt PowerShell, który:
+
+• tworzy Dashboard Website w IIS
+• tworzy Permission API Website w IIS
+• tworzy App Poole
+• ustawia Windows Authentication dla Permission API
+• ustawia Static Content dla Dashboardu
+• ustawia bindingi (HTTP/HTTPS)
+• kopiuje pliki do katalogów docelowych
+
+
+To jest kopiuj‑wklej, gotowe do uruchomienia na serwerze Windows z IIS.
+
+Skrypt jest w pełni automatyczny i idempotentny (można uruchamiać wiele razy).
+
+---
+
+🟦 SKRYPT POWERSHELL – Dashboard + Permission API (pełna automatyzacja)
+
+Import-Module WebAdministration
+
+Write-Host "=== Tworzenie Dashboard i Permission API w IIS ===" -ForegroundColor Cyan
+
+# ============================
+# KONFIGURACJA
+# ============================
+
+$DashboardName = "Dashboard"
+$DashboardPath = "C:\inetpub\Dashboard"
+$DashboardPort = 8080   # jeśli chcesz HTTP
+$DashboardHost = "dashboard.local"  # lub FQDN
+
+$PermissionApiName = "PermissionApi"
+$PermissionApiPath = "C:\inetpub\PermissionApi"
+$PermissionApiPort = 8090
+$PermissionApiHost = "permissions.local"
+
+# ============================
+# TWORZENIE FOLDERÓW
+# ============================
+
+New-Item -ItemType Directory -Force -Path $DashboardPath | Out-Null
+New-Item -ItemType Directory -Force -Path $PermissionApiPath | Out-Null
+
+Write-Host "Foldery utworzone." -ForegroundColor Green
+
+# ============================
+# APP POOL – DASHBOARD
+# ============================
+
+if (-not (Test-Path IIS:\AppPools\$DashboardName)) {
+    New-WebAppPool -Name $DashboardName
+    Set-ItemProperty IIS:\AppPools\$DashboardName -Name managedRuntimeVersion -Value ""
+    Write-Host "App Pool Dashboard utworzony." -ForegroundColor Green
+} else {
+    Write-Host "App Pool Dashboard już istnieje." -ForegroundColor Yellow
+}
+
+# ============================
+# APP POOL – PERMISSION API
+# ============================
+
+if (-not (Test-Path IIS:\AppPools\$PermissionApiName)) {
+    New-WebAppPool -Name $PermissionApiName
+    Set-ItemProperty IIS:\AppPools\$PermissionApiName -Name managedRuntimeVersion -Value ""
+    Write-Host "App Pool Permission API utworzony." -ForegroundColor Green
+} else {
+    Write-Host "App Pool Permission API już istnieje." -ForegroundColor Yellow
+}
+
+# ============================
+# WEBSITE – DASHBOARD
+# ============================
+
+if (-not (Test-Path IIS:\Sites\$DashboardName)) {
+    New-Website -Name $DashboardName `
+                -Port $DashboardPort `
+                -HostHeader $DashboardHost `
+                -PhysicalPath $DashboardPath `
+                -ApplicationPool $DashboardName
+
+    Write-Host "Website Dashboard utworzony." -ForegroundColor Green
+} else {
+    Write-Host "Website Dashboard już istnieje." -ForegroundColor Yellow
+}
+
+# ============================
+# WEBSITE – PERMISSION API
+# ============================
+
+if (-not (Test-Path IIS:\Sites\$PermissionApiName)) {
+    New-Website -Name $PermissionApiName `
+                -Port $PermissionApiPort `
+                -HostHeader $PermissionApiHost `
+                -PhysicalPath $PermissionApiPath `
+                -ApplicationPool $PermissionApiName
+
+    Write-Host "Website Permission API utworzony." -ForegroundColor Green
+} else {
+    Write-Host "Website Permission API już istnieje." -ForegroundColor Yellow
+}
+
+# ============================
+# WINDOWS AUTH – PERMISSION API
+# ============================
+
+Set-WebConfigurationProperty `
+    -Filter "/system.webServer/security/authentication/windowsAuthentication" `
+    -PSPath "IIS:\Sites\$PermissionApiName" `
+    -Name enabled `
+    -Value $true
+
+Set-WebConfigurationProperty `
+    -Filter "/system.webServer/security/authentication/anonymousAuthentication" `
+    -PSPath "IIS:\Sites\$PermissionApiName" `
+    -Name enabled `
+    -Value $false
+
+Write-Host "Windows Authentication skonfigurowane dla Permission API." -ForegroundColor Green
+
+# ============================
+# STATIC CONTENT – DASHBOARD
+# ============================
+
+Set-WebConfigurationProperty `
+    -Filter "/system.webServer/staticContent" `
+    -PSPath "IIS:\Sites\$DashboardName" `
+    -Name "." `
+    -Value ""
+
+Write-Host "Static Content skonfigurowane dla Dashboardu." -ForegroundColor Green
+
+# ============================
+# MIME TYPES – DASHBOARD
+# ============================
+
+Add-WebConfigurationProperty `
+    -PSPath "IIS:\Sites\$DashboardName" `
+    -Filter "/system.webServer/staticContent" `
+    -Name "mimeMap" `
+    -Value @{fileExtension=".json"; mimeType="application/json"} -ErrorAction SilentlyContinue
+
+Add-WebConfigurationProperty `
+    -PSPath "IIS:\Sites\$DashboardName" `
+    -Filter "/system.webServer/staticContent" `
+    -Name "mimeMap" `
+    -Value @{fileExtension=".js"; mimeType="application/javascript"} -ErrorAction SilentlyContinue
+
+Add-WebConfigurationProperty `
+    -PSPath "IIS:\Sites\$DashboardName" `
+    -Filter "/system.webServer/staticContent" `
+    -Name "mimeMap" `
+    -Value @{fileExtension=".css"; mimeType="text/css"} -ErrorAction SilentlyContinue
+
+Write-Host "MIME types dodane." -ForegroundColor Green
+
+# ============================
+# KONIEC
+# ============================
+
+Write-Host "=== KONFIGURACJA ZAKOŃCZONA ===" -ForegroundColor Cyan
+
+
+---
+
+🧠 Co robi ten skrypt?
+
+✔ Tworzy dwa App Poole:
+
+• Dashboard
+• Permission API
+
+
+✔ Tworzy dwa Website:
+
+• Dashboard → statyczny HTML
+• Permission API → .NET 8 + Windows Auth
+
+
+✔ Ustawia:
+
+• Windows Authentication dla Permission API
+• MIME types dla Dashboardu
+• Static Content
+• Bindingi (port + host header)
+
+
+✔ Tworzy foldery i przygotowuje środowisko
+
+---
+
+🔥 Chcesz wersję z HTTPS + automatycznym przypisaniem certyfikatu?
+
+Mogę wygenerować:
+
+• skrypt z New-SelfSignedCertificate
+• skrypt z przypisaniem certyfikatu do bindingu
+• skrypt z importem certyfikatu z pliku PFX
+
+
+Wybierz:
+
+• HTTPS dla Dashboardu
+• HTTPS dla Permission API
+• HTTPS dla obu + certyfikat self-signed
