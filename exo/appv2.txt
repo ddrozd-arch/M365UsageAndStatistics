@@ -1,0 +1,777 @@
+Super, to lecimy folderami — tak, żebyś mógł zrobić czyste kopiuj‑wklej → ZIP → run.
+
+---
+
+📁 ROOT PROJEKTU
+
+`MailboxPermissionsAudit.csproj`
+
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.61.0" />
+  </ItemGroup>
+
+</Project>
+
+
+`Program.cs`
+
+using MailboxPermissionsAudit.Services;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.Configure<ExchangeOnlineOptions>(
+    builder.Configuration.GetSection("ExchangeOnline"));
+
+builder.Services.AddHttpClient();
+
+builder.Services.AddSingleton<ExchangePermissionService>();
+builder.Services.AddSingleton<CalendarPermissionService>();
+
+builder.Services.AddControllersWithViews();
+
+var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Home/Error");
+}
+
+app.UseStaticFiles();
+app.UseRouting();
+
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
+
+app.Run();
+
+
+`appsettings.json`
+
+{
+  "ExchangeOnline": {
+    "TenantId": "your-tenant-id",
+    "AppId": "your-app-registration-id",
+    "CertificateThumbprint": "your-cert-thumbprint",
+    "ClientSecret": "your-client-secret-or-empty",
+    "Organization": "yourtenant.onmicrosoft.com",
+    "AdminApiBaseUrl": "https://outlook.office365.com/adminapi/beta"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+---
+
+📁 `Models`
+
+Utwórz folder Models i wklej pliki:
+
+`Models/PermissionEntry.cs`
+
+namespace MailboxPermissionsAudit.Models;
+
+public class PermissionEntry
+{
+    public string Mailbox { get; set; } = "";
+    public string User { get; set; } = "";
+    public string PermissionType { get; set; } = ""; // FullAccess / SendAs / SendOnBehalf
+}
+
+
+`Models/CalendarPermissionEntry.cs`
+
+namespace MailboxPermissionsAudit.Models;
+
+public class CalendarPermissionEntry
+{
+    public string Mailbox { get; set; } = "";
+    public string Delegate { get; set; } = "";
+    public string Rights { get; set; } = "";
+}
+
+
+`Models/QueryMode.cs`
+
+namespace MailboxPermissionsAudit.Models;
+
+public enum QueryMode
+{
+    PerUser,
+    PerMailbox
+}
+
+
+---
+
+📁 `Services`
+
+Utwórz folder Services i wklej:
+
+`Services/ExchangeOnlineOptions.cs`
+
+namespace MailboxPermissionsAudit.Services;
+
+public class ExchangeOnlineOptions
+{
+    public string TenantId { get; set; } = "";
+    public string AppId { get; set; } = "";
+    public string CertificateThumbprint { get; set; } = "";
+    public string ClientSecret { get; set; } = "";
+    public string Organization { get; set; } = "";
+    public string AdminApiBaseUrl { get; set; } = "";
+}
+
+
+`Services/ExchangePermissionService.cs`
+
+using System.Net.Http.Headers;
+using System.Security.Cryptography.X509Certificates;
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+using MailboxPermissionsAudit.Models;
+using Microsoft.Extensions.Options;
+using Microsoft.Identity.Client;
+using Newtonsoft.Json.Linq;
+
+namespace MailboxPermissionsAudit.Services;
+
+public class ExchangePermissionService
+{
+    private readonly ExchangeOnlineOptions _options;
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    public ExchangePermissionService(
+        IOptions<ExchangeOnlineOptions> options,
+        IHttpClientFactory httpClientFactory)
+    {
+        _options = options.Value;
+        _httpClientFactory = httpClientFactory;
+    }
+
+    // TOKEN: cert → fallback na secret
+    private async Task<string> GetAdminApiTokenAsync()
+    {
+        var scopes = new[] { "https://outlook.office365.com/.default" };
+
+        // 1) Certyfikat
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_options.CertificateThumbprint))
+            {
+                var store = new X509Store(StoreLocation.LocalMachine);
+                store.Open(OpenFlags.ReadOnly);
+
+                var certs = store.Certificates
+                    .Find(X509FindType.FindByThumbprint, _options.CertificateThumbprint, false);
+
+                if (certs.Count > 0)
+                {
+                    var cert = certs[0];
+
+                    var app = ConfidentialClientApplicationBuilder
+                        .Create(_options.AppId)
+                        .WithCertificate(cert)
+                        .WithTenantId(_options.TenantId)
+                        .Build();
+
+                    var result = await app.AcquireTokenForClient(scopes).ExecuteAsync();
+                    return result.AccessToken;
+                }
+            }
+        }
+        catch
+        {
+            // Ignorujemy – przechodzimy do secret
+        }
+
+        // 2) Client secret
+        if (!string.IsNullOrWhiteSpace(_options.ClientSecret))
+        {
+            var app = ConfidentialClientApplicationBuilder
+                .Create(_options.AppId)
+                .WithClientSecret(_options.ClientSecret)
+                .WithTenantId(_options.TenantId)
+                .Build();
+
+            var result = await app.AcquireTokenForClient(scopes).ExecuteAsync();
+            return result.AccessToken;
+        }
+
+        throw new InvalidOperationException(
+            "Brak możliwości uwierzytelnienia: nie znaleziono certyfikatu ani client secret.");
+    }
+
+    private async Task<HttpClient> CreateAdminApiClientAsync()
+    {
+        var token = await GetAdminApiTokenAsync();
+        var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    // Uniwersalna paginacja REST (EXO Admin API)
+    private async Task<JArray> GetPagedResultsAsync(string url)
+    {
+        var client = await CreateAdminApiClientAsync();
+        var results = new JArray();
+
+        while (!string.IsNullOrEmpty(url))
+        {
+            var json = await client.GetStringAsync(url);
+            var obj = JObject.Parse(json);
+
+            if (obj["value"] is JArray page)
+                results.Merge(page);
+
+            url = obj["@odata.nextLink"]?.ToString();
+        }
+
+        return results;
+    }
+
+    // PowerShell session (SendOnBehalf)
+    private PowerShell CreateExchangeSession()
+    {
+        var initialState = InitialSessionState.CreateDefault();
+        initialState.ImportPSModule(new[] { "ExchangeOnlineManagement" });
+
+        var runspace = RunspaceFactory.CreateRunspace(initialState);
+        runspace.Open();
+
+        var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+
+        ps.AddCommand("Connect-ExchangeOnline")
+          .AddParameter("AppId", _options.AppId)
+          .AddParameter("Tenant", _options.TenantId)
+          .AddParameter("CertificateThumbprint", _options.CertificateThumbprint)
+          .AddParameter("Organization", _options.Organization)
+          .AddParameter("ShowBanner", false);
+
+        ps.Invoke();
+        ps.Commands.Clear();
+
+        return ps;
+    }
+
+    // PER USER
+    public async Task<List<PermissionEntry>> GetPermissionsPerUserAsync(string userUpn)
+    {
+        var results = new List<PermissionEntry>();
+
+        // FullAccess via REST
+        var faUrl = $"{_options.AdminApiBaseUrl}/MailboxPermissions?$filter=UserPrincipalName eq '{userUpn}'";
+        var faArray = await GetPagedResultsAsync(faUrl);
+
+        foreach (var item in faArray)
+        {
+            var rights = item["AccessRights"]?.ToString() ?? "";
+            if (rights.Contains("FullAccess", StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new PermissionEntry
+                {
+                    Mailbox = item["Identity"]?.ToString() ?? "",
+                    User = userUpn,
+                    PermissionType = "FullAccess"
+                });
+            }
+        }
+
+        // SendAs via REST
+        var saUrl = $"{_options.AdminApiBaseUrl}/RecipientPermissions?$filter=Trustee eq '{userUpn}'";
+        var saArray = await GetPagedResultsAsync(saUrl);
+
+        foreach (var item in saArray)
+        {
+            var rights = item["AccessRights"]?.ToString() ?? "";
+            if (rights.Contains("SendAs", StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new PermissionEntry
+                {
+                    Mailbox = item["Identity"]?.ToString() ?? "",
+                    User = userUpn,
+                    PermissionType = "SendAs"
+                });
+            }
+        }
+
+        // SendOnBehalf via PowerShell
+        using var ps = CreateExchangeSession();
+        ps.AddScript($@"
+            Get-EXOMailbox -ResultSize Unlimited -Properties GrantSendOnBehalfTo,PrimarySmtpAddress |
+            Where-Object {{ $_.GrantSendOnBehalfTo -contains '{userUpn}' }} |
+            Select-Object PrimarySmtpAddress
+        ");
+        var sob = ps.Invoke();
+        ps.Commands.Clear();
+
+        foreach (var item in sob)
+        {
+            results.Add(new PermissionEntry
+            {
+                Mailbox = item.Members["PrimarySmtpAddress"].Value?.ToString() ?? "",
+                User = userUpn,
+                PermissionType = "SendOnBehalf"
+            });
+        }
+
+        ps.AddCommand("Disconnect-ExchangeOnline").AddParameter("Confirm", false);
+        ps.Invoke();
+
+        return results;
+    }
+
+    // PER MAILBOX
+    public async Task<List<PermissionEntry>> GetPermissionsPerMailboxAsync(string mailbox)
+    {
+        var results = new List<PermissionEntry>();
+
+        // FullAccess via REST
+        var faUrl = $"{_options.AdminApiBaseUrl}/MailboxPermissions?$filter=Identity eq '{mailbox}'";
+        var faArray = await GetPagedResultsAsync(faUrl);
+
+        foreach (var item in faArray)
+        {
+            var rights = item["AccessRights"]?.ToString() ?? "";
+            if (rights.Contains("FullAccess", StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new PermissionEntry
+                {
+                    Mailbox = item["Identity"]?.ToString() ?? "",
+                    User = item["UserPrincipalName"]?.ToString() ?? "",
+                    PermissionType = "FullAccess"
+                });
+            }
+        }
+
+        // SendAs via REST
+        var saUrl = $"{_options.AdminApiBaseUrl}/RecipientPermissions?$filter=Identity eq '{mailbox}'";
+        var saArray = await GetPagedResultsAsync(saUrl);
+
+        foreach (var item in saArray)
+        {
+            var rights = item["AccessRights"]?.ToString() ?? "";
+            if (rights.Contains("SendAs", StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new PermissionEntry
+                {
+                    Mailbox = item["Identity"]?.ToString() ?? "",
+                    User = item["Trustee"]?.ToString() ?? "",
+                    PermissionType = "SendAs"
+                });
+            }
+        }
+
+        // SendOnBehalf via PowerShell
+        using var ps = CreateExchangeSession();
+        ps.AddScript($@"
+            Get-EXOMailbox -Identity '{mailbox}' -Properties GrantSendOnBehalfTo,PrimarySmtpAddress |
+            Select-Object GrantSendOnBehalfTo, PrimarySmtpAddress
+        ");
+        var sob = ps.Invoke();
+        ps.Commands.Clear();
+
+        if (sob.Any())
+        {
+            var entry = sob.First();
+            var primary = entry.Members["PrimarySmtpAddress"].Value?.ToString() ?? "";
+            var trustees = entry.Members["GrantSendOnBehalfTo"].Value as System.Collections.IEnumerable;
+
+            if (trustees != null)
+            {
+                foreach (var t in trustees)
+                {
+                    results.Add(new PermissionEntry
+                    {
+                        Mailbox = primary,
+                        User = t.ToString() ?? "",
+                        PermissionType = "SendOnBehalf"
+                    });
+                }
+            }
+        }
+
+        ps.AddCommand("Disconnect-ExchangeOnline").AddParameter("Confirm", false);
+        ps.Invoke();
+
+        return results;
+    }
+}
+
+
+`Services/CalendarPermissionService.cs`
+
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+using MailboxPermissionsAudit.Models;
+using Microsoft.Extensions.Options;
+
+namespace MailboxPermissionsAudit.Services;
+
+public class CalendarPermissionService
+{
+    private readonly ExchangeOnlineOptions _options;
+
+    public CalendarPermissionService(IOptions<ExchangeOnlineOptions> options)
+    {
+        _options = options.Value;
+    }
+
+    private PowerShell CreateExchangeSession()
+    {
+        var initialState = InitialSessionState.CreateDefault();
+        initialState.ImportPSModule(new[] { "ExchangeOnlineManagement" });
+
+        var runspace = RunspaceFactory.CreateRunspace(initialState);
+        runspace.Open();
+
+        var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+
+        ps.AddCommand("Connect-ExchangeOnline")
+          .AddParameter("AppId", _options.AppId)
+          .AddParameter("Tenant", _options.TenantId)
+          .AddParameter("CertificateThumbprint", _options.CertificateThumbprint)
+          .AddParameter("Organization", _options.Organization)
+          .AddParameter("ShowBanner", false);
+
+        ps.Invoke();
+        ps.Commands.Clear();
+
+        return ps;
+    }
+
+    public List<CalendarPermissionEntry> GetCalendarPermissions(string mailbox)
+    {
+        using var ps = CreateExchangeSession();
+        var results = new List<CalendarPermissionEntry>();
+
+        ps.AddScript($@"
+            Get-MailboxFolderPermission -Identity '{mailbox}:\Calendar' |
+            Where-Object {{ $_.User -ne 'Default' -and $_.User -ne 'Anonymous' }} |
+            Select-Object User, AccessRights
+        ");
+
+        var perms = ps.Invoke();
+        ps.Commands.Clear();
+
+        foreach (var item in perms)
+        {
+            var rightsEnum = item.Members["AccessRights"].Value as System.Collections.IEnumerable
+                             ?? Array.Empty<object>();
+
+            results.Add(new CalendarPermissionEntry
+            {
+                Mailbox = mailbox,
+                Delegate = item.Members["User"].Value?.ToString() ?? "",
+                Rights = string.Join(", ", rightsEnum.Cast<object>().Select(x => x.ToString()))
+            });
+        }
+
+        ps.AddCommand("Disconnect-ExchangeOnline").AddParameter("Confirm", false);
+        ps.Invoke();
+
+        return results;
+    }
+}
+
+
+---
+
+📁 `Controllers`
+
+Utwórz folder Controllers:
+
+`Controllers/HomeController.cs`
+
+using System.Text;
+using MailboxPermissionsAudit.Models;
+using MailboxPermissionsAudit.Services;
+using Microsoft.AspNetCore.Mvc;
+
+namespace MailboxPermissionsAudit.Controllers;
+
+public class HomeController : Controller
+{
+    private readonly ExchangePermissionService _permService;
+    private readonly CalendarPermissionService _calService;
+
+    public HomeController(
+        ExchangePermissionService permService,
+        CalendarPermissionService calService)
+    {
+        _permService = permService;
+        _calService = calService;
+    }
+
+    [HttpGet]
+    public IActionResult Index()
+    {
+        return View(new List<PermissionEntry>());
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Index(string queryValue, string mode)
+    {
+        if (string.IsNullOrWhiteSpace(queryValue))
+        {
+            ViewBag.Error = "Podaj UPN użytkownika lub adres skrzynki.";
+            return View(new List<PermissionEntry>());
+        }
+
+        List<PermissionEntry> results =
+            mode == "PerUser"
+                ? await _permService.GetPermissionsPerUserAsync(queryValue)
+                : await _permService.GetPermissionsPerMailboxAsync(queryValue);
+
+        ViewBag.Mode = mode;
+        ViewBag.QueryValue = queryValue;
+
+        return View(results);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> ExportCsv(string queryValue, string mode)
+    {
+        if (string.IsNullOrWhiteSpace(queryValue))
+            return BadRequest("Brak parametru.");
+
+        List<PermissionEntry> results =
+            mode == "PerUser"
+                ? await _permService.GetPermissionsPerUserAsync(queryValue)
+                : await _permService.GetPermissionsPerMailboxAsync(queryValue);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Mailbox,User,PermissionType");
+
+        foreach (var r in results)
+        {
+            sb.AppendLine($"{r.Mailbox},{r.User},{r.PermissionType}");
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+        return File(bytes, "text/csv", $"permissions_{mode}_{queryValue}.csv");
+    }
+
+    // Calendar
+
+    [HttpGet]
+    public IActionResult Calendar()
+    {
+        return View(new List<CalendarPermissionEntry>());
+    }
+
+    [HttpPost]
+    public IActionResult Calendar(string mailbox)
+    {
+        if (string.IsNullOrWhiteSpace(mailbox))
+        {
+            ViewBag.Error = "Podaj adres skrzynki (mailbox).";
+            return View(new List<CalendarPermissionEntry>());
+        }
+
+        var results = _calService.GetCalendarPermissions(mailbox);
+        ViewBag.Mailbox = mailbox;
+        return View(results);
+    }
+
+    [HttpGet]
+    public IActionResult ExportCalendarCsv(string mailbox)
+    {
+        if (string.IsNullOrWhiteSpace(mailbox))
+            return BadRequest("Brak parametru.");
+
+        var results = _calService.GetCalendarPermissions(mailbox);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Mailbox,Delegate,Rights");
+
+        foreach (var r in results)
+        {
+            sb.AppendLine($"{r.Mailbox},{r.Delegate},{r.Rights}");
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+        return File(bytes, "text/csv", $"calendar_{mailbox}.csv");
+    }
+}
+
+
+---
+
+📁 `Views/Home`
+
+Utwórz folder Views/Home:
+
+`Views/Home/Index.cshtml`
+
+@model List<MailboxPermissionsAudit.Models.PermissionEntry>
+
+@{
+    ViewData["Title"] = "Mailbox Permissions Audit";
+    var mode = ViewBag.Mode as string ?? "PerUser";
+    var queryValue = ViewBag.QueryValue as string ?? "";
+}
+
+<h2>Mailbox Permissions Audit</h2>
+
+<p>
+    <a href="@Url.Action("Calendar", "Home")">Przejdź do widoku uprawnień kalendarza</a>
+</p>
+
+@if (ViewBag.Error != null)
+{
+    <div style="color:red">@ViewBag.Error</div>
+}
+
+<form method="post">
+    <div>
+        <label>
+            <input type="radio" name="mode" value="PerUser" @(mode == "PerUser" ? "checked" : "") />
+            Per user (UPN)
+        </label>
+        <label style="margin-left:20px">
+            <input type="radio" name="mode" value="PerMailbox" @(mode == "PerMailbox" ? "checked" : "") />
+            Per mailbox (adres skrzynki)
+        </label>
+    </div>
+
+    <div style="margin-top:10px">
+        <input type="text" name="queryValue" value="@queryValue"
+               style="width:400px"
+               placeholder="user@domain.com lub mailbox@domain.com" />
+    </div>
+
+    <div style="margin-top:10px">
+        <button type="submit">Pobierz uprawnienia</button>
+
+        @if (Model != null && Model.Any())
+        {
+            <a style="margin-left:20px"
+               href="@Url.Action("ExportCsv", new { queryValue = queryValue, mode = mode })">
+                Eksportuj do CSV
+            </a>
+        }
+    </div>
+</form>
+
+@if (Model != null && Model.Any())
+{
+    <h3 style="margin-top:20px">Wyniki</h3>
+    <table border="1" cellpadding="4" cellspacing="0">
+        <thead>
+            <tr>
+                <th>Mailbox</th>
+                <th>User</th>
+                <th>PermissionType</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var r in Model)
+        {
+            <tr>
+                <td>@r.Mailbox</td>
+                <td>@r.User</td>
+                <td>@r.PermissionType</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+
+`Views/Home/Calendar.cshtml`
+
+@model List<MailboxPermissionsAudit.Models.CalendarPermissionEntry>
+
+@{
+    ViewData["Title"] = "Calendar Permissions";
+    var mailbox = ViewBag.Mailbox as string ?? "";
+}
+
+<h2>Calendar Permissions</h2>
+
+<p>
+    <a href="@Url.Action("Index", "Home")">Wróć do audytu skrzynek</a>
+</p>
+
+@if (ViewBag.Error != null)
+{
+    <div style="color:red">@ViewBag.Error</div>
+}
+
+<form method="post">
+    <div>
+        <input type="text" name="mailbox" value="@mailbox"
+               style="width:400px"
+               placeholder="mailbox@domain.com" />
+    </div>
+
+    <div style="margin-top:10px">
+        <button type="submit">Pobierz uprawnienia kalendarza</button>
+
+        @if (Model != null && Model.Any())
+        {
+            <a style="margin-left:20px"
+               href="@Url.Action("ExportCalendarCsv", new { mailbox = mailbox })">
+                Eksportuj do CSV
+            </a>
+        }
+    </div>
+</form>
+
+@if (Model != null && Model.Any())
+{
+    <h3 style="margin-top:20px">Wyniki</h3>
+    <table border="1" cellpadding="4" cellspacing="0">
+        <thead>
+            <tr>
+                <th>Mailbox</th>
+                <th>Delegate</th>
+                <th>Rights</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var r in Model)
+        {
+            <tr>
+                <td>@r.Mailbox</td>
+                <td>@r.Delegate</td>
+                <td>@r.Rights</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+
+---
+
+Masz teraz kompletny projekt:
+
+1. Tworzysz folder MailboxPermissionsAudit.
+2. Wklejasz pliki wg struktury.
+3. Uzupełniasz appsettings.json.
+4. dotnet restore → dotnet run.
+5. Pakujesz folder do ZIP.
+
+
+Jeśli coś się wywali przy pierwszym odpaleniu (np. moduł EXO, cert, uprawnienia app registration), wrzuć stack trace, a przelecimy to razem jak code review.
