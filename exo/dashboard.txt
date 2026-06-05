@@ -1,0 +1,276 @@
+Poniżej masz kompletny, gotowy do użycia, w pełni działający zestaw plików:
+HTML + CSS + JS (menu z animacją, rozwijaniem, podświetleniem aktywnej sekcji i aktywnego elementu).
+Całość jest zgodna z Twoją architekturą dashboardu.
+
+Wszystko jest kopiuj‑wklej, bez skrótów.
+
+---
+
+📁 index.html
+
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8" />
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="layout">
+
+    <!-- LEFT MENU -->
+    <nav class="sidebar">
+        <ul class="menu">
+
+            <li class="menu-section" data-section="usage">
+                <div class="menu-title">Usage Collector</div>
+                <ul class="submenu">
+                    <li data-view="usage-summary">Summary</li>
+                    <li data-view="usage-runjobs">Run Jobs</li>
+                    <li data-view="usage-logs">Logs</li>
+                </ul>
+            </li>
+
+            <li class="menu-section" data-section="exo">
+                <div class="menu-title">EXO Tools</div>
+                <ul class="submenu">
+                    <li data-view="exo-tool1">Tool 1</li>
+                    <li data-view="exo-tool2">Tool 2</li>
+                    <li data-view="exo-tool3">Tool 3</li>
+                </ul>
+            </li>
+
+            <li class="menu-section" data-section="teams">
+                <div class="menu-title">Teams Tools</div>
+                <ul class="submenu">
+                    <li data-view="teams-tools">Teams Tools</li>
+                </ul>
+            </li>
+
+        </ul>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main id="content">
+        <h2>Wybierz sekcję z menu</h2>
+    </main>
+
+</div>
+
+<script src="js/menu.js"></script>
+<script src="js/router.js"></script>
+
+</body>
+</html>
+
+
+---
+
+🎨 styles.css
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+}
+
+.layout {
+    display: flex;
+    height: 100vh;
+}
+
+.sidebar {
+    width: 260px;
+    background: #1f1f1f;
+    color: #fff;
+    padding-top: 20px;
+}
+
+.menu {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.menu-title {
+    padding: 12px 20px;
+    cursor: pointer;
+    font-weight: bold;
+    background: #2a2a2a;
+    transition: background 0.25s ease;
+}
+
+.menu-title:hover {
+    background: #333;
+}
+
+/* ANIMACJA ROZWIJANIA */
+.submenu {
+    list-style: none;
+    padding-left: 20px;
+
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+
+    transition: max-height 0.35s ease, opacity 0.25s ease;
+}
+
+.menu-section.open .submenu {
+    max-height: 500px;
+    opacity: 1;
+}
+
+/* PODŚWIETLENIE AKTYWNEJ SEKCJI */
+.menu-section.active-section > .menu-title {
+    background: #3a3a3a;
+    color: #fff;
+}
+
+/* PODŚWIETLENIE AKTYWNEGO ELEMENTU */
+.submenu li {
+    padding: 8px 20px;
+    cursor: pointer;
+    transition: background 0.25s ease;
+}
+
+.submenu li:hover {
+    background: #333;
+}
+
+.submenu li.active-item {
+    background: #444;
+    color: #fff;
+    font-weight: bold;
+}
+
+#content {
+    flex: 1;
+    padding: 20px;
+}
+
+
+---
+
+⚙️ js/menu.js
+
+(Obsługa rozwijania sekcji)
+
+document.querySelectorAll(".menu-title").forEach(title => {
+    title.addEventListener("click", () => {
+        const section = title.parentElement;
+
+        // Akordeon – zamyka inne sekcje
+        document.querySelectorAll(".menu-section").forEach(s => {
+            if (s !== section) s.classList.remove("open");
+        });
+
+        section.classList.toggle("open");
+    });
+});
+
+
+---
+
+🔄 js/router.js
+
+(Ładowanie widoków + podświetlanie aktywnej sekcji i elementu)
+
+document.querySelectorAll("[data-view]").forEach(item => {
+    item.addEventListener("click", async () => {
+        const view = item.getAttribute("data-view");
+
+        // Ładowanie widoku
+        const response = await fetch(`/views/${view}.html`);
+        const html = await response.text();
+        document.getElementById("content").innerHTML = html;
+
+        // Reset podświetleń
+        document.querySelectorAll(".submenu li").forEach(li => li.classList.remove("active-item"));
+        document.querySelectorAll(".menu-section").forEach(sec => sec.classList.remove("active-section"));
+
+        // Ustaw aktywny element
+        item.classList.add("active-item");
+
+        // Ustaw aktywną sekcję
+        const section = item.closest(".menu-section");
+        section.classList.add("active-section");
+        section.classList.add("open");
+    });
+});
+
+
+---
+
+📁 Przykładowe widoki (umieść w /views/)
+
+usage-summary.html
+
+<h2>Usage Collector – Summary</h2>
+<p>Treść widoku Summary...</p>
+
+
+usage-runjobs.html
+
+<h2>Usage Collector – Run Jobs</h2>
+<p>Treść widoku Run Jobs...</p>
+
+
+usage-logs.html
+
+<h2>Usage Collector – Logs</h2>
+<p>Treść widoku Logs...</p>
+
+
+exo-tool1.html
+
+<h2>EXO Tools – Tool 1</h2>
+<p>Treść narzędzia 1...</p>
+
+
+exo-tool2.html
+
+<h2>EXO Tools – Tool 2</h2>
+<p>Treść narzędzia 2...</p>
+
+
+exo-tool3.html
+
+<h2>EXO Tools – Tool 3</h2>
+<p>Treść narzędzia 3...</p>
+
+
+teams-tools.html
+
+<h2>Teams Tools</h2>
+<p>Treść narzędzi Teams...</p>
+
+
+---
+
+🔥 Całość jest gotowa do użycia
+
+Masz:
+
+• rozwijane menu
+• animacje
+• podświetlanie aktywnej sekcji
+• podświetlanie aktywnego elementu
+• ładowanie widoków bez przeładowania strony
+• akordeon sekcji
+
+
+To jest już pełny, profesjonalny dashboard.
+
+---
+
+Co robimy dalej?
+
+Możemy dodać:
+
+• ikony Fluent UI do menu
+• zapis aktywnej sekcji w localStorage
+• animację fade‑in treści po prawej
+
+
+Dawid, wybierz kolejny krok.
