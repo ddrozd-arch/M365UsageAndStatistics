@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Logs Panel</title>
+<style>
+    body {
+        font-family: Segoe UI, Arial, sans-serif;
+        background: #f5f5f5;
+        padding: 40px;
+    }
+
+    .section-title {
+        font-size: 26px;
+        font-weight: 600;
+        margin-bottom: 24px;
+    }
+
+    /* Tabs */
+    .tabs {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+
+    .tab-radio {
+        display: none;
+    }
+
+    .tab-btn {
+        background: #e6e6e6;
+        color: #333;
+        padding: 12px 24px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 15px;
+        transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+        user-select: none;
+    }
+
+    .tab-btn:hover {
+        background: #d0d0d0;
+        transform: scale(1.05);
+    }
+
+    .tab-radio:checked + .tab-btn {
+        background: #0078d4;
+        color: white;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        transform: scale(1.05);
+    }
+
+    /* Search */
+    .search-box {
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .search-input {
+        width: 300px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #ccc;
+        font-size: 15px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    /* Table wrapper + sticky header + shadow on scroll */
+    .table-wrapper {
+        background: #fff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        width: 100%;
+        max-width: 1100px;
+        margin-bottom: 40px;
+        max-height: 500px;
+        overflow-y: auto;
+        position: relative;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+    }
+
+    thead {
+        background: #f0f0f0;
+    }
+
+    thead th {
+        position: sticky;
+        top: 0;
+        background: #f0f0f0;
+        z-index: 5;
+        transition: box-shadow 0.25s ease;
+    }
+
+    .table-wrapper:has(tbody tr:nth-child(n+2)) thead th,
+    .table-wrapper:has(tbody tr:hover) thead th {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    th {
+        text-align: left;
+        padding: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    /* Sort icons + animations */
+    th .sort-icon {
+        font-size: 12px;
+        opacity: 0.3;
+        transform: translateY(0px);
+        transition:
+            opacity 0.25s ease,
+            color 0.25s ease,
+            transform 0.25s ease;
+    }
+
+    th:hover .sort-icon {
+        opacity: 0.8;
+        transform: translateY(-1px);
+    }
+
+    th.active .sort-icon {
+        opacity: 1;
+        color: #0078d4;
+        transform: translateY(-2px);
+    }
+
+    td {
+        padding: 12px;
+        border-bottom: 1px solid #e0e0e0;
+    }
+
+    /* Row hover micro-motion */
+    tbody tr {
+        transition:
+            transform 0.25s ease,
+            background 0.25s ease,
+            opacity 0.25s ease;
+    }
+
+    tbody tr:hover {
+        transform: scale(1.01) translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        background: #fafafa;
+    }
+
+    /* Row initial animation (cascade) */
+    tbody tr {
+        opacity: 0;
+        transform: translateY(6px);
+        animation: rowFadeIn 0.35s ease forwards;
+    }
+
+    tbody tr:nth-child(1) { animation-delay: 0.05s; }
+    tbody tr:nth-child(2) { animation-delay: 0.10s; }
+    tbody tr:nth-child(3) { animation-delay: 0.15s; }
+    tbody tr:nth-child(4) { animation-delay: 0.20s; }
+    tbody tr:nth-child(5) { animation-delay: 0.25s; }
+    tbody tr:nth-child(6) { animation-delay: 0.30s; }
+    tbody tr:nth-child(7) { animation-delay: 0.35s; }
+    tbody tr:nth-child(8) { animation-delay: 0.40s; }
+
+    @keyframes rowFadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* UI-only sort "jump" */
+    th:active ~ tbody tr {
+        transform: translateY(3px);
+    }
+
+    /* Search focus UI-only effect */
+    .search-input:focus ~ .table-wrapper tbody tr {
+        opacity: 0.7;
+    }
+
+    .search-input:placeholder-shown ~ .table-wrapper tbody tr {
+        opacity: 1;
+    }
+
+    /* Status dots */
+    .status-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+    }
+
+    .dot-green { background: #2ecc71; }
+    .dot-yellow { background: #f1c40f; }
+    .dot-red { background: #e74c3c; }
+
+    /* Tab content + fade-switch */
+    .tab-content {
+        display: none;
+        opacity: 0;
+        transform: translateY(6px);
+        transition: opacity 0.35s ease, transform 0.35s ease;
+    }
+
+    #tab-main:checked ~ .search-box ~ #content-main,
+    #tab-detailed:checked ~ .search-box ~ #content-detailed,
+    #tab-copilot:checked ~ .search-box ~ #content-copilot,
+    #tab-sql:checked ~ .search-box ~ #content-sql,
+    #tab-smtp:checked ~ .search-box ~ #content-smtp {
+        display: block;
+        opacity: 1;
+        transform: translateY(0);
+    }
+</style>
+</head>
+<body>
+
+<div class="section-title">Logs Panel</div>
+
+<!-- Tabs -->
+<div class="tabs">
+    <input type="radio" id="tab-main" name="tabs" class="tab-radio" checked>
+    <label for="tab-main" class="tab-btn">Main</label>
+
+    <input type="radio" id="tab-detailed" name="tabs" class="tab-radio">
+    <label for="tab-detailed" class="tab-btn">Detailed</label>
+
+    <input type="radio" id="tab-copilot" name="tabs" class="tab-radio">
+    <label for="tab-copilot" class="tab-btn">Copilot</label>
+
+    <input type="radio" id="tab-sql" name="tabs" class="tab-radio">
+    <label for="tab-sql" class="tab-btn">SQL</label>
+
+    <input type="radio" id="tab-smtp" name="tabs" class="tab-radio">
+    <label for="tab-smtp" class="tab-btn">SMTP</label>
+</div>
+
+<!-- Search -->
+<div class="search-box">
+    <input class="search-input" placeholder="Search logs...">
+</div>
+
+<!-- MAIN -->
+<div id="content-main" class="tab-content table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                <th class="active">Timestamp <span class="sort-icon">▲</span></th>
+                <th>Level <span class="sort-icon">▲</span></th>
+                <th>Message <span class="sort-icon">▲</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>2026-06-09 12:30</td><td>Info</td><td>System started</td></tr>
+            <tr><td>2026-06-09 12:31</td><td>Warn</td><td>Slow response detected</td></tr>
+            <tr><td>2026-06-09 12:32</td><td>Error</td><td>Connection timeout</td></tr>
+            <tr><td>2026-06-09 12:33</td><td>Info</td><td>Job completed</td></tr>
+            <tr><td>2026-06-09 12:34</td><td>Warn</td><td>High memory usage</td></tr>
+            <tr><td>2026-06-09 12:35</td><td>Info</td><td>Health check OK</td></tr>
+            <tr><td>2026-06-09 12:36</td><td>Error</td><td>Disk full</td></tr>
+            <tr><td>2026-06-09 12:37</td><td>Info</td><td>Cleanup finished</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- DETAILED -->
+<div id="content-detailed" class="tab-content table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                <th class="active">Timestamp <span class="sort-icon">▲</span></th>
+                <th>Level <span class="sort-icon">▲</span></th>
+                <th>Source <span class="sort-icon">▲</span></th>
+                <th>Message <span class="sort-icon">▲</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>2026-06-09 12:30</td><td>Info</td><td>Scheduler</td><td>Job executed</td></tr>
+            <tr><td>2026-06-09 12:31</td><td>Error</td><td>API</td><td>Invalid token</td></tr>
+            <tr><td>2026-06-09 12:32</td><td>Warn</td><td>Database</td><td>Slow query</td></tr>
+            <tr><td>2026-06-09 12:33</td><td>Info</td><td>Worker</td><td>Worker started</td></tr>
+            <tr><td>2026-06-09 12:34</td><td>Error</td><td>Worker</td><td>Worker crashed</td></tr>
+            <tr><td>2026-06-09 12:35</td><td>Info</td><td>Scheduler</td><td>Retry scheduled</td></tr>
+            <tr><td>2026-06-09 12:36</td><td>Warn</td><td>API</td><td>Rate limit near</td></tr>
+            <tr><td>2026-06-09 12:37</td><td>Info</td><td>Database</td><td>Connection pool reset</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- COPILOT -->
+<div id="content-copilot" class="tab-content table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                <th class="active">Timestamp <span class="sort-icon">▲</span></th>
+                <th>Action <span class="sort-icon">▲</span></th>
+                <th>User <span class="sort-icon">▲</span></th>
+                <th>Message <span class="sort-icon">▲</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>2026-06-09 12:30</td><td>Generate</td><td>dawid</td><td>Created summary</td></tr>
+            <tr><td>2026-06-09 12:31</td><td>Analyze</td><td>dawid</td><td>Processed logs</td></tr>
+            <tr><td>2026-06-09 12:32</td><td>Explain</td><td>dawid</td><td>Returned insights</td></tr>
+            <tr><td>2026-06-09 12:33</td><td>Generate</td><td>dawid</td><td>Generated SQL hints</td></tr>
+            <tr><td>2026-06-09 12:34</td><td>Analyze</td><td>dawid</td><td>Checked SMTP failures</td></tr>
+            <tr><td>2026-06-09 12:35</td><td>Explain</td><td>dawid</td><td>Suggested retry strategy</td></tr>
+            <tr><td>2026-06-09 12:36</td><td>Generate</td><td>dawid</td><td>Created dashboard layout</td></tr>
+            <tr><td>2026-06-09 12:37</td><td>Analyze</td><td>dawid</td><td>Reviewed worker status</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- SQL -->
+<div id="content-sql" class="tab-content table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                <th class="active">Timestamp <span class="sort-icon">▲</span></th>
+                <th>Query <span class="sort-icon">▲</span></th>
+                <th>Duration <span class="sort-icon">▲</span></th>
+                <th>Status <span class="sort-icon">▲</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>2026-06-09 12:30</td><td>SELECT * FROM users</td><td>12ms</td><td>OK</td></tr>
+            <tr><td>2026-06-09 12:31</td><td>UPDATE jobs SET status='OK'</td><td>44ms</td><td>OK</td></tr>
+            <tr><td>2026-06-09 12:32</td><td>DELETE FROM logs WHERE level='DEBUG'</td><td>88ms</td><td>Failed</td></tr>
+            <tr><td>2026-06-09 12:33</td><td>INSERT INTO audit...</td><td>33ms</td><td>OK</td></tr>
+            <tr><td>2026-06-09 12:34</td><td>SELECT * FROM jobs WHERE status='Failed'</td><td>55ms</td><td>OK</td></tr>
+            <tr><td>2026-06-09 12:35</td><td>UPDATE workers SET state='Busy'</td><td>21ms</td><td>OK</td></tr>
+            <tr><td>2026-06-09 12:36</td><td>SELECT COUNT(*) FROM logs</td><td>19ms</td><td>OK</td></tr>
+            <tr><td>2026-06-09 12:37</td><td>DELETE FROM jobs WHERE id=42</td><td>102ms</td><td>Failed</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- SMTP -->
+<div id="content-smtp" class="tab-content table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                <th class="active">Timestamp <span class="sort-icon">▲</span></th>
+                <th>Recipient <span class="sort-icon">▲</span></th>
+                <th>Subject <span class="sort-icon">▲</span></th>
+                <th>Status <span class="sort-icon">▲</span></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>2026-06-09 12:30</td><td>user@example.com</td><td>Report</td><td>Sent</td></tr>
+            <tr><td>2026-06-09 12:31</td><td>admin@example.com</td><td>Alert</td><td>Failed</td></tr>
+            <tr><td>2026-06-09 12:32</td><td>team@example.com</td><td>Summary</td><td>Sent</td></tr>
+            <tr><td>2026-06-09 12:33</td><td>ops@example.com</td><td>Error log</td><td>Sent</td></tr>
+            <tr><td>2026-06-09 12:34</td><td>support@example.com</td><td>Ticket update</td><td>Failed</td></tr>
+            <tr><td>2026-06-09 12:35</td><td>ceo@example.com</td><td>Daily brief</td><td>Sent</td></tr>
+            <tr><td>2026-06-09 12:36</td><td>dev@example.com</td><td>Deployment status</td><td>Sent</td></tr>
+            <tr><td>2026-06-09 12:37</td><td>qa@example.com</td><td>Test results</td><td>Failed</td></tr>
+        </tbody>
+    </table>
+</div>
+
+</body>
+</html>
