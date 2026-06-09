@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Run Jobs Table</title>
+<style>
+    body {
+        font-family: Segoe UI, Arial, sans-serif;
+        background: #f5f5f5;
+        padding: 40px;
+    }
+
+    .section-title {
+        font-size: 26px;
+        font-weight: 600;
+        margin-bottom: 24px;
+    }
+
+    /* Worker status panel */
+    .worker-status {
+        width: 300px;
+        background: #fff;
+        padding: 16px;
+        border-radius: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .status-dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+    }
+
+    .dot-green { background: #2ecc71; }
+    .dot-yellow { background: #f1c40f; }
+    .dot-red { background: #e74c3c; }
+
+    /* RUN ALL button */
+    .run-all-btn {
+        background: #0078d4;
+        color: white;
+        padding: 14px 28px;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        cursor: pointer;
+        margin-bottom: 32px;
+        transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    .run-all-btn:hover {
+        background: #005a9e;
+        transform: scale(1.05);
+    }
+
+    /* Table container */
+    .table-wrapper {
+        background: #fff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        width: 100%;
+        max-width: 1100px;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+    }
+
+    thead {
+        background: #f0f0f0;
+    }
+
+    th {
+        text-align: left;
+        padding: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    th .sort-icon {
+        font-size: 12px;
+        opacity: 0.4;
+        transition: opacity 0.2s ease;
+    }
+
+    th:hover .sort-icon {
+        opacity: 1;
+    }
+
+    th.active .sort-icon {
+        opacity: 1;
+        color: #0078d4;
+    }
+
+    td {
+        padding: 12px;
+        border-bottom: 1px solid #e0e0e0;
+    }
+
+    /* Hover effect on row */
+    tr:hover {
+        background: #fafafa;
+        transform: scale(1.01);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+
+    /* Run button */
+    .run-btn {
+        background: #0078d4;
+        color: white;
+        padding: 6px 14px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    .run-btn:hover {
+        background: #005a9e;
+        transform: scale(1.1);
+    }
+
+    /* Modal overlay */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.4);
+        justify-content: center;
+        align-items: center;
+    }
+
+    /* Modal box */
+    .modal {
+        background: #fff;
+        padding: 24px;
+        border-radius: 12px;
+        width: 360px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+        text-align: center;
+    }
+
+    .modal-title {
+        font-size: 20px;
+        font-weight: 600;
+        margin-bottom: 16px;
+    }
+
+    .modal-buttons {
+        margin-top: 20px;
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+    }
+
+    .modal-btn {
+        padding: 10px 20px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        font-size: 15px;
+    }
+
+    .confirm {
+        background: #d9534f;
+        color: white;
+    }
+
+    .cancel {
+        background: #e0e0e0;
+    }
+
+    /* Checkbox hack to show modal */
+    #modal-toggle {
+        display: none;
+    }
+
+    #modal-toggle:checked + .modal-overlay {
+        display: flex;
+    }
+</style>
+</head>
+<body>
+
+<div class="section-title">Run Jobs – Table View</div>
+
+<!-- Worker status -->
+<div class="worker-status">
+    <div class="status-dot dot-green"></div>
+    <div>Worker status: Free</div>
+</div>
+
+<!-- Run all -->
+<label for="modal-toggle">
+    <button class="run-all-btn">Run All</button>
+</label>
+
+<!-- Modal trigger -->
+<input type="checkbox" id="modal-toggle">
+
+<!-- Modal -->
+<div class="modal-overlay">
+    <div class="modal">
+        <div class="modal-title">Confirm Run All</div>
+        <div>Are you sure you want to run all jobs?</div>
+
+        <div class="modal-buttons">
+            <button class="modal-btn confirm">Run All</button>
+
+            <label for="modal-toggle">
+                <button class="modal-btn cancel">Cancel</button>
+            </label>
+        </div>
+    </div>
+</div>
+
+<!-- Table -->
+<div class="table-wrapper">
+<table>
+    <thead>
+        <tr>
+            <th class="active">Job Name <span class="sort-icon">▲</span></th>
+            <th>Status <span class="sort-icon">▲</span></th>
+            <th>Last Run <span class="sort-icon">▲</span></th>
+            <th>Last Status <span class="sort-icon">▲</span></th>
+            <th>Action</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        <tr>
+            <td>Job A</td>
+            <td><div class="status-dot dot-green"></div></td>
+            <td>2026-06-09 12:30</td>
+            <td>OK</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job B</td>
+            <td><div class="status-dot dot-red"></div></td>
+            <td>2026-06-09 11:10</td>
+            <td>Failed</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job C</td>
+            <td><div class="status-dot dot-green"></div></td>
+            <td>2026-06-09 10:00</td>
+            <td>OK</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job D</td>
+            <td><div class="status-dot dot-red"></div></td>
+            <td>2026-06-09 09:40</td>
+            <td>Failed</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job E</td>
+            <td><div class="status-dot dot-green"></div></td>
+            <td>2026-06-09 08:15</td>
+            <td>OK</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job F</td>
+            <td><div class="status-dot dot-green"></div></td>
+            <td>2026-06-09 07:00</td>
+            <td>OK</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job G</td>
+            <td><div class="status-dot dot-red"></div></td>
+            <td>2026-06-09 06:30</td>
+            <td>Failed</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+
+        <tr>
+            <td>Job H</td>
+            <td><div class="status-dot dot-green"></div></td>
+            <td>2026-06-09 05:10</td>
+            <td>OK</td>
+            <td><button class="run-btn">Run</button></td>
+        </tr>
+    </tbody>
+</table>
+</div>
+
+</body>
+</html>
