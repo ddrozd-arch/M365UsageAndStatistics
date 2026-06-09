@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Job Status Grid</title>
+<style>
+    body {
+        font-family: Segoe UI, Arial, sans-serif;
+        background: #f5f5f5;
+        padding: 40px;
+    }
+
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 24px;
+        justify-items: center;
+    }
+
+    .card {
+        width: 320px;
+        height: 180px;
+        background: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        padding: 16px;
+        box-sizing: border-box;
+        position: relative;
+        border: 2px solid transparent;
+
+        /* 🔧 Tu ustawiasz płynność animacji */
+        transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+
+        z-index: 0;
+    }
+
+    .card:hover {
+        /* 🔧 TU ZMIENIASZ POWIĘKSZENIE
+           scale(1.2) = 20% większe
+           scale(1.3) = 30% większe
+           scale(1.15) = 15% większe
+        */
+        transform: scale(1.2);
+
+        border-color: #0078d4;
+
+        /* 🔧 Tu zmieniasz cień przy hover */
+        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+
+        /* 🔧 Dzięki temu karta jest NAD innymi */
+        z-index: 10;
+    }
+
+    .title {
+        text-align: center;
+        font-weight: 600;
+        font-size: 18px;
+        margin-bottom: 12px;
+    }
+
+    .status-dot {
+        /* 🔧 TU ZMIENIASZ ROZMIAR KROPKI
+           width/height = średnica
+           np. 16px → 20px, 24px itd.
+        */
+        width: 16px;
+        height: 16px;
+
+        border-radius: 50%;
+        position: absolute;
+        right: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+
+    .dot-green { background: #2ecc71; }
+    .dot-red { background: #e74c3c; }
+
+    .info {
+        position: absolute;
+        left: 16px;
+        top: 60px;
+
+        /* 🔧 ZMIANA: wyrównanie do LEWEJ */
+        text-align: left;
+
+        font-size: 14px;
+        line-height: 1.4;
+        color: #333;
+    }
+</style>
+</head>
+<body>
+
+<div class="grid">
+
+    <div class="card">
+        <div class="title">Job A</div>
+        <div class="status-dot dot-green"></div>
+        <div class="info">
+            Last run: 2026-06-09 12:30<br>
+            Last status: OK<br>
+            Last success: 2026-06-09 12:30
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job B</div>
+        <div class="status-dot dot-red"></div>
+        <div class="info">
+            Last run: 2026-06-09 11:10<br>
+            Last status: Failed<br>
+            Last success: 2026-06-08 22:00
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job C</div>
+        <div class="status-dot dot-green"></div>
+        <div class="info">
+            Last run: 2026-06-09 10:00<br>
+            Last status: OK<br>
+            Last success: 2026-06-09 10:00
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job D</div>
+        <div class="status-dot dot-red"></div>
+        <div class="info">
+            Last run: 2026-06-09 09:40<br>
+            Last status: Failed<br>
+            Last success: 2026-06-08 18:20
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job E</div>
+        <div class="status-dot dot-green"></div>
+        <div class="info">
+            Last run: 2026-06-09 08:15<br>
+            Last status: OK<br>
+            Last success: 2026-06-09 08:15
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job F</div>
+        <div class="status-dot dot-green"></div>
+        <div class="info">
+            Last run: 2026-06-09 07:00<br>
+            Last status: OK<br>
+            Last success: 2026-06-09 07:00
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job G</div>
+        <div class="status-dot dot-red"></div>
+        <div class="info">
+            Last run: 2026-06-09 06:30<br>
+            Last status: Failed<br>
+            Last success: 2026-06-08 21:00
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Job H</div>
+        <div class="status-dot dot-green"></div>
+        <div class="info">
+            Last run: 2026-06-09 05:10<br>
+            Last status: OK<br>
+            Last success: 2026-06-09 05:10
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>
