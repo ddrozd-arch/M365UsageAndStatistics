@@ -1,0 +1,241 @@
+Poniżej masz jedną, kompletną, spójną odpowiedź, która zawiera:
+
+1. Proponowaną strukturę menu
+2. Wyjaśnienie, dlaczego taka architektura jest najlepsza
+3. Pełny schemat logów, który obsłuży wszystkie Twoje aplikacje, joby i różne typy wyników (RunResults, CopilotResults itd.)
+
+
+Całość jest zaprojektowana pod Twoją architekturę:
+IIS + Windows Auth + Permission Service + 3 workery + Dashboard.
+
+---
+
+🟦 MENU — struktura i uzasadnienie
+
+⭐ Finalna struktura menu
+
+• Usage• Dashboard
+• Run manually
+
+• EXO Tools• Mailbox permissions
+• Calendar events
+
+• Teams Tools• Attendance report
+
+• Settings• M365 Usage config
+• EXO config
+• Teams config
+
+• Logs
+
+
+---
+
+🟧 Dlaczego takie menu jest najlepsze?
+
+1) Odwzorowuje Twoją architekturę 1:1
+
+Masz cztery główne moduły:
+
+• Permissions (backend, niewidoczny w menu)
+• M365 Usage
+• EXO Tools
+• Teams Tools
+
+
+Menu dokładnie to odzwierciedla — nic więcej, nic mniej.
+
+---
+
+2) Każdy moduł ma swoje joby → osobne podsekcje
+
+• Usage → dashboard + manual run
+• EXO → mailbox + calendar
+• Teams → attendance
+
+
+To jest logiczne, intuicyjne i skalowalne.
+
+---
+
+3) Settings jest osobny, bo każda aplikacja ma inny config
+
+To jest bardzo ważne:
+
+• Usage ma swoje API keys / schedule
+• EXO ma swoje Exchange endpoints
+• Teams ma swoje Graph permissions
+
+
+Dlatego Settings musi być osobnym modułem, a nie częścią Usage.
+
+---
+
+4) Logs jest globalny
+
+Bo:
+
+• Permission Service loguje autoryzację
+• Usage loguje joby
+• EXO loguje mailbox/calendar
+• Teams loguje attendance
+• Dashboard loguje UI actions
+
+
+Dlatego jeden widok logów jest najlepszy.
+
+---
+
+5) Menu jest gotowe pod Permission Service
+
+Permission Service może zwrócić:
+
+{
+  "usage": true,
+  "exo": false,
+  "teams": true,
+  "settings": true,
+  "logs": true
+}
+
+
+I front ukryje sekcje.
+
+---
+
+🟦 SCHEMAT LOGÓW — jeden widok, wiele typów jobów
+
+Twoje aplikacje mają różne typy logów:
+
+• Usage → RunResults
+• Copilot → CopilotResults
+• EXO → MailboxPermissions, CalendarEvents
+• Teams → AttendanceReport
+
+
+To jest normalne.
+Dlatego log musi mieć wspólny nagłówek + dynamiczny payload.
+
+---
+
+⭐ Wspólny schemat logu (metadata)
+
+To jest część wspólna dla wszystkich aplikacji:
+
+Pole	Typ	Opis	
+LogId	GUID	Unikalny identyfikator	
+Timestamp	DateTime	Kiedy log powstał	
+Application	string	Usage / EXO / Teams / Permissions / Dashboard	
+JobName	string	RunResults / CopilotResults / MailboxPermissions / AttendanceReport	
+Level	string	Info / Warn / Error	
+Message	string	Krótki opis	
+User	string	DOMAIN\user lub SYSTEM	
+CorrelationId	string	Do łączenia logów między aplikacjami	
+Server	string	Nazwa serwera IIS	
+DurationMs	int	Czas wykonania joba	
+
+
+To pozwala filtrować logi w jednym widoku.
+
+---
+
+⭐ Payload — część specyficzna (dynamiczny JSON)
+
+To jest pole:
+
+Pole	Typ	Opis	
+Payload	JSON	Dane specyficzne dla joba	
+
+
+Przykłady:
+
+Usage → RunResults
+
+{
+  "totalFiles": 1234,
+  "processed": 1230,
+  "errors": 4
+}
+
+
+Copilot → CopilotResults
+
+{
+  "prompt": "Get usage for last 30 days",
+  "tokensUsed": 2345
+}
+
+
+EXO → MailboxPermissions
+
+{
+  "mailbox": "user@firma.pl",
+  "permissions": ["FullAccess", "SendAs"]
+}
+
+
+Teams → AttendanceReport
+
+{
+  "meetingId": "abc-123",
+  "participants": 42
+}
+
+
+---
+
+⭐ Finalny schemat logu (pełny)
+
+{
+  "logId": "guid",
+  "timestamp": "2026-06-13T21:00:00Z",
+  "application": "Usage",
+  "jobName": "RunResults",
+  "level": "Info",
+  "message": "Job completed successfully",
+  "user": "DOMAIN\\dawid",
+  "correlationId": "abc-123",
+  "server": "SRV-IIS-01",
+  "durationMs": 35000,
+  "payload": {
+    "totalFiles": 1234,
+    "processed": 1230,
+    "errors": 4
+  }
+}
+
+
+---
+
+🟦 Dlaczego ten schemat jest idealny?
+
+✔ Jeden widok logów
+
+Nie musisz robić 10 stron.
+
+✔ Jeden endpoint
+
+Backend jest prosty.
+
+✔ Każda aplikacja może logować co chce
+
+Payload jest dynamiczny.
+
+✔ Możesz filtrować po Application / JobName
+
+Czyli masz i globalny widok, i widoki per aplikacja.
+
+✔ Audyt jest spójny
+
+Wszystkie logi mają te same metadane.
+
+---
+
+🟩 Chcesz, żebym teraz przygotował:
+
+• SQL schema tabeli Logi
+• C# model + serwis logowania
+• UI logów w stylu Fluent
+
+
+Wybierz, co generujemy dalej.
