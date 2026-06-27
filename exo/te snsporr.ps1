@@ -1,14 +1,6 @@
 <#
     Transport Reply Analyzer – Exchange Online
-    Scenariusz: grupy dystrybucyjne bez skrzynek, zsynchronizowane do chmury
-    Funkcje:
-      - MessageTrace + MessageTraceDetail
-      - Normalizacja tematu
-      - Delta time (kto komu, ile minut)
-      - Statystyki wątku (first reply, avg reply, reply count)
-      - Pivot per nadawca
-      - HTML raport z wykresem Chart.js
-      - CSV raport Power BI friendly
+    Wersja z LOGGING + TELEMETRY
 #>
 
 # -----------------------------
@@ -18,35 +10,58 @@ $DistributionGroup = "grupa@contoso.com"   # <-- ustaw grupę
 $Days = 7                                   # <-- zmień na 1 dla raportu jednodniowego
 
 # -----------------------------
-# DATE RANGE
+# PATHS
 # -----------------------------
-$End   = (Get-Date)
-$Start = (Get-Date).AddDays(-$Days)
+$timestamp = (Get-Date -Format "yyyy-MM-dd_HH-mm-ss")
+$logPath = ".\TransportAnalyzer_$timestamp.log"
+$telemetryPath = ".\TransportTelemetry_$timestamp.json"
+$csvPath = ".\TransportReport_${Days}days.csv"
+$htmlPath = ".\TransportReplyReport_${Days}days.html"
 
-Write-Host "Zakres dat: $Start -> $End" -ForegroundColor Cyan
+# -----------------------------
+# LOGGING FUNCTION
+# -----------------------------
+function Write-Log {
+    param([string]$level, [string]$message)
+    $line = "[{0}] {1}  {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $level, $message
+    Add-Content -Path $logPath -Value $line
+    Write-Host $line
+}
+
+Write-Log "INFO" "Start Transport Reply Analyzer"
+Write-Log "INFO" "Group: $DistributionGroup"
+Write-Log "INFO" "Days: $Days"
 
 # -----------------------------
 # CHECK EXCHANGE ONLINE SESSION
 # -----------------------------
 try {
     Get-OrganizationConfig -ErrorAction Stop | Out-Null
-    Write-Host "Połączony z Exchange Online" -ForegroundColor Green
+    Write-Log "INFO" "Connected to Exchange Online"
 } catch {
-    Write-Host "Brak połączenia z Exchange Online. Uruchom Connect-ExchangeOnline." -ForegroundColor Red
+    Write-Log "ERROR" "Not connected to Exchange Online. Run Connect-ExchangeOnline."
     exit
 }
 
 # -----------------------------
-# GET MESSAGE TRACE FOR GROUP
+# DATE RANGE
 # -----------------------------
-Write-Host "Pobieram MessageTrace dla grupy $DistributionGroup..." -ForegroundColor Cyan
+$End   = (Get-Date)
+$Start = (Get-Date).AddDays(-$Days)
+Write-Log "INFO" "Date range: $Start -> $End"
 
+# -----------------------------
+# GET MESSAGE TRACE
+# -----------------------------
+Write-Log "INFO" "Fetching MessageTrace..."
 $trace = Get-MessageTrace -RecipientAddress $DistributionGroup -StartDate $Start -EndDate $End
 
 if (-not $trace) {
-    Write-Host "Brak wyników dla podanego zakresu dat." -ForegroundColor Yellow
+    Write-Log "WARNING" "No MessageTrace results found."
     exit
 }
+
+Write-Log "INFO" "MessageTrace records: $($trace.Count)"
 
 # -----------------------------
 # BUILD TRANSPORT REPORT
@@ -78,10 +93,11 @@ $report = foreach ($msg in $trace) {
     }
 }
 
+Write-Log "INFO" "Transport report built."
+
 # -----------------------------
 # ROZSZERZONY DELTA TIME
 # -----------------------------
-
 function Normalize-Subject {
     param($subject)
     if (-not $subject) { return "" }
@@ -94,13 +110,12 @@ function Normalize-Subject {
     return $s
 }
 
-# Dodaj NormalizedSubject
 $report | ForEach-Object {
     $_ | Add-Member -NotePropertyName NormalizedSubject -NotePropertyValue (Normalize-Subject $_.Subject)
 }
 
-# Grupowanie po temacie
 $groups = $report | Group-Object NormalizedSubject
+$threadCount = $groups.Count
 
 foreach ($g in $groups) {
 
@@ -140,6 +155,9 @@ foreach ($g in $groups) {
     }
 }
 
+Write-Log "INFO" "Delta-time calculated."
+Write-Log "INFO" "Threads: $threadCount"
+
 # -----------------------------
 # PIVOT PER NADAWCA
 # -----------------------------
@@ -156,12 +174,13 @@ $senderStats = $report |
     } |
     Sort-Object AvgReplyMinutes
 
+Write-Log "INFO" "Pivot per sender calculated."
+
 # -----------------------------
 # EXPORT CSV
 # -----------------------------
-$csvPath = ".\TransportReport_${Days}days.csv"
 $report | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-Write-Host "CSV zapisany: $csvPath" -ForegroundColor Green
+Write-Log "INFO" "CSV saved: $csvPath"
 
 # -----------------------------
 # HTML + CHART.JS
@@ -228,8 +247,30 @@ $htmlTable = $report |
     ConvertTo-Html -Fragment
 
 $html = ConvertTo-Html -Head $head -Body ($body + $htmlTable)
+$html | Out-File -FilePath $htmlPath -Encoding UTF8
 
-$outPath = ".\TransportReplyReport_${Days}days.html"
-$html | Out-File -FilePath $outPath -Encoding UTF8
+Write-Log "INFO" "HTML saved: $htmlPath"
 
-Write-Host "HTML raport zapisany: $outPath" -ForegroundColor Green
+# -----------------------------
+# TELEMETRY JSON
+# -----------------------------
+$telemetry = [PSCustomObject]@{
+    timestamp = (Get-Date).ToString("o")
+    group = $DistributionGroup
+    days = $Days
+    messageCount = $trace.Count
+    threadCount = $threadCount
+    avgReplyMinutes = ($report.ThreadAverageReplyMinutes | Where-Object { $_ -ne $null } | Measure-Object -Average).Average
+    firstReplyMinutes = ($report.ThreadFirstReplyMinutes | Where-Object { $_ -ne $null } | Measure-Object -Average).Average
+    senders = $senderStats.Count
+    topSlow = $senderStats | Sort-Object AvgReplyMinutes -Descending | Select-Object -First 5
+    topFast = $senderStats | Sort-Object AvgReplyMinutes -Ascending | Select-Object -First 5
+}
+
+$telemetry | ConvertTo-Json -Depth 5 | Out-File -FilePath $telemetryPath -Encoding UTF8
+Write-Log "INFO" "Telemetry saved: $telemetryPath"
+
+# -----------------------------
+# END
+# -----------------------------
+Write-Log "INFO" "Completed."
