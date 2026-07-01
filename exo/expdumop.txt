@@ -1,0 +1,667 @@
+Dawid — zrobię to dokładnie tak, jak prosisz:
+👉 kompletna aplikacja .NET 8
+👉 wszystkie klasy w jednym miejscu
+👉 pełny skan + delta sync + changes.json + timestampy
+👉 instrukcja wdrożenia krok po kroku
+
+Bez skrótów, bez pominięć — pełny, gotowy projekt, który możesz wkleić i uruchomić.
+
+---
+
+📦 STRUKTURA PROJEKTU (finalna)
+
+ExoPermDump/
+  ExoPermDump.csproj
+  appsettings.json
+  Program.cs
+  FileNaming.cs
+  SnapshotStore.cs
+  ChangeDetector.cs
+  ProgressReporter.cs
+  ParallelExchangeClient.cs
+  PermissionCollector.cs
+  Models/
+    PermissionTypes.cs
+    MailboxPermissionSnapshot.cs
+    UserPermissionSnapshot.cs
+    MailboxPermissionEntry.cs
+    UserPermissionEntry.cs
+    ChangeRecord.cs
+
+
+---
+
+🧩 WSZYSTKIE KLASY — KOMPLETNY KOD
+
+---
+
+ExoPermDump.csproj
+
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management.Automation" Version="7.4.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="ShellProgressBar" Version="5.0.0" />
+  </ItemGroup>
+
+</Project>
+
+
+---
+
+appsettings.json
+
+{
+  "ExchangeOnline": {
+    "Organization": "tenant.onmicrosoft.com",
+    "AppId": "GUID",
+    "CertificateThumbprint": "THUMB"
+  },
+  "Output": {
+    "MailboxJsonPath": "mailboxes",
+    "UserJsonPath": "users",
+    "ChangesJsonPath": "changes"
+  }
+}
+
+
+---
+
+Program.cs
+
+using ExoPermDump;
+using ExoPermDump.Models;
+using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
+
+var config = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json")
+    .Build();
+
+var org = config["ExchangeOnline:Organization"]!;
+var appId = config["ExchangeOnline:AppId"]!;
+var thumb = config["ExchangeOnline:CertificateThumbprint"]!;
+
+var mailboxBase = config["Output:MailboxJsonPath"]!;
+var userBase = config["Output:UserJsonPath"]!;
+var changesBase = config["Output:ChangesJsonPath"]!;
+
+var mailboxToday = FileNaming.MailboxFileForToday(mailboxBase);
+var userToday = FileNaming.UserFileForToday(userBase);
+var changesFile = FileNaming.ChangesFileWithTimestamp(changesBase);
+
+Console.WriteLine($"Today's mailbox file: {mailboxToday}");
+
+bool fullScanRequired = !File.Exists(mailboxToday);
+
+List<MailboxPermissionSnapshot> previousSnapshots;
+
+if (fullScanRequired)
+{
+    Console.WriteLine("No snapshot for today → FULL SCAN");
+    previousSnapshots = new List<MailboxPermissionSnapshot>();
+}
+else
+{
+    Console.WriteLine("Snapshot for today exists → DELTA SYNC");
+    previousSnapshots = SnapshotStore.LoadPrevious(mailboxToday);
+}
+
+Console.WriteLine("Connecting to Exchange Online...");
+var client = new ParallelExchangeClient(org, appId, thumb);
+
+var collector = new PermissionCollector(client, previousSnapshots);
+
+Console.WriteLine(fullScanRequired ? "Running FULL SCAN..." : "Running DELTA SYNC...");
+var mailboxSnapshots = collector.CollectMailboxSnapshots();
+
+Console.WriteLine("Building user snapshots...");
+var userSnapshots = collector.BuildUserSnapshots(mailboxSnapshots);
+
+Console.WriteLine("Detecting changes...");
+var changes = ChangeDetector.DetectChanges(previousSnapshots, mailboxSnapshots);
+
+Console.WriteLine($"Detected {changes.Count} changes.");
+
+Console.WriteLine("Writing JSON...");
+
+SnapshotStore.Save(mailboxToday, mailboxSnapshots);
+
+File.WriteAllText(userToday,
+    JsonConvert.SerializeObject(userSnapshots, Formatting.Indented));
+
+File.WriteAllText(changesFile,
+    JsonConvert.SerializeObject(changes, Formatting.Indented));
+
+Console.WriteLine("DONE.");
+Console.WriteLine($"Mailbox JSON: {mailboxToday}");
+Console.WriteLine($"User JSON:    {userToday}");
+Console.WriteLine($"Changes JSON: {changesFile}");
+
+
+---
+
+FileNaming.cs
+
+namespace ExoPermDump;
+
+public static class FileNaming
+{
+    public static string MailboxFileForToday(string basePath)
+    {
+        var date = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        return $"{basePath}_{date}.json";
+    }
+
+    public static string UserFileForToday(string basePath)
+    {
+        var date = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        return $"{basePath}_{date}.json";
+    }
+
+    public static string ChangesFileWithTimestamp(string basePath)
+    {
+        var ts = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss");
+        return $"{basePath}_{ts}.json";
+    }
+}
+
+
+---
+
+SnapshotStore.cs
+
+using ExoPermDump.Models;
+using Newtonsoft.Json;
+
+namespace ExoPermDump;
+
+public static class SnapshotStore
+{
+    public static List<MailboxPermissionSnapshot> LoadPrevious(string path)
+    {
+        if (!File.Exists(path))
+            return new List<MailboxPermissionSnapshot>();
+
+        var json = File.ReadAllText(path);
+        return JsonConvert.DeserializeObject<List<MailboxPermissionSnapshot>>(json)
+               ?? new List<MailboxPermissionSnapshot>();
+    }
+
+    public static void Save(string path, List<MailboxPermissionSnapshot> snapshots)
+    {
+        var json = JsonConvert.SerializeObject(snapshots, Formatting.Indented);
+        File.WriteAllText(path, json);
+    }
+}
+
+
+---
+
+ChangeDetector.cs
+
+using ExoPermDump.Models;
+
+namespace ExoPermDump;
+
+public static class ChangeDetector
+{
+    public static List<ChangeRecord> DetectChanges(
+        List<MailboxPermissionSnapshot> previous,
+        List<MailboxPermissionSnapshot> current)
+    {
+        var changes = new List<ChangeRecord>();
+
+        var prevByMailbox = previous.ToDictionary(x => x.MailboxSmtp, StringComparer.OrdinalIgnoreCase);
+        var currByMailbox = current.ToDictionary(x => x.MailboxSmtp, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var kv in currByMailbox)
+        {
+            var smtp = kv.Key;
+            var curr = kv.Value;
+
+            prevByMailbox.TryGetValue(smtp, out var prev);
+
+            if (prev == null)
+            {
+                foreach (var entry in curr.FullAccess)
+                    changes.Add(NewChange("Added", smtp, entry));
+
+                foreach (var entry in curr.SendAs)
+                    changes.Add(NewChange("Added", smtp, entry));
+
+                foreach (var entry in curr.SendOnBehalf)
+                    changes.Add(NewChange("Added", smtp, entry));
+
+                continue;
+            }
+
+            ComparePermissionList(prev.FullAccess, curr.FullAccess, smtp, PermissionType.FullAccess, changes);
+            ComparePermissionList(prev.SendAs, curr.SendAs, smtp, PermissionType.SendAs, changes);
+            ComparePermissionList(prev.SendOnBehalf, curr.SendOnBehalf, smtp, PermissionType.SendOnBehalf, changes);
+        }
+
+        return changes;
+    }
+
+    private static void ComparePermissionList(
+        List<MailboxPermissionEntry> prev,
+        List<MailboxPermissionEntry> curr,
+        string smtp,
+        PermissionType type,
+        List<ChangeRecord> changes)
+    {
+        var prevDict = prev.ToDictionary(x => x.GranteeUpn, StringComparer.OrdinalIgnoreCase);
+        var currDict = curr.ToDictionary(x => x.GranteeUpn, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var kv in prevDict)
+        {
+            if (!currDict.ContainsKey(kv.Key))
+            {
+                changes.Add(new ChangeRecord
+                {
+                    MailboxSmtp = smtp,
+                    ChangeType = "Removed",
+                    PermissionType = type,
+                    GranteeUpn = kv.Key,
+                    OldRights = kv.Value.Rights,
+                    NewRights = null
+                });
+            }
+        }
+
+        foreach (var kv in currDict)
+        {
+            if (!prevDict.TryGetValue(kv.Key, out var prevEntry))
+            {
+                changes.Add(new ChangeRecord
+                {
+                    MailboxSmtp = smtp,
+                    ChangeType = "Added",
+                    PermissionType = type,
+                    GranteeUpn = kv.Key,
+                    OldRights = null,
+                    NewRights = kv.Value.Rights
+                });
+            }
+            else if (prevEntry.Rights != kv.Value.Rights)
+            {
+                changes.Add(new ChangeRecord
+                {
+                    MailboxSmtp = smtp,
+                    ChangeType = "Modified",
+                    PermissionType = type,
+                    GranteeUpn = kv.Key,
+                    OldRights = prevEntry.Rights,
+                    NewRights = kv.Value.Rights
+                });
+            }
+        }
+    }
+
+    private static ChangeRecord NewChange(string type, string smtp, MailboxPermissionEntry entry)
+    {
+        return new ChangeRecord
+        {
+            MailboxSmtp = smtp,
+            ChangeType = type,
+            PermissionType = entry.Type,
+            GranteeUpn = entry.GranteeUpn,
+            OldRights = null,
+            NewRights = entry.Rights
+        };
+    }
+}
+
+
+---
+
+ProgressReporter.cs
+
+using ShellProgressBar;
+
+namespace ExoPermDump;
+
+public class ProgressReporter
+{
+    private readonly ProgressBar _bar;
+    private int _current = 0;
+    private readonly int _total;
+
+    public ProgressReporter(int total)
+    {
+        _total = total;
+        _bar = new ProgressBar(total, "Processing mailboxes...", new ProgressBarOptions
+        {
+            ProgressCharacter = '■',
+            ProgressBarOnBottom = true,
+            ForegroundColor = ConsoleColor.Green,
+            BackgroundColor = ConsoleColor.DarkGray,
+            CollapseWhenFinished = false
+        });
+    }
+
+    public void Tick()
+    {
+        var newVal = Interlocked.Increment(ref _current);
+        _bar.Tick(newVal);
+    }
+
+    public void Finish()
+    {
+        _bar.Tick(_total);
+    }
+}
+
+
+---
+
+ParallelExchangeClient.cs
+
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+
+namespace ExoPermDump;
+
+public class ParallelExchangeClient
+{
+    private readonly string _org;
+    private readonly string _appId;
+    private readonly string _thumb;
+
+    public ParallelExchangeClient(string org, string appId, string thumb)
+    {
+        _org = org;
+        _appId = appId;
+        _thumb = thumb;
+    }
+
+    private Runspace CreateRunspace()
+    {
+        var initial = InitialSessionState.CreateDefault();
+        initial.ImportPSModule(new[] { "ExchangeOnlineManagement" });
+
+        var runspace = RunspaceFactory.CreateRunspace(initial);
+        runspace.Open();
+
+        using var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+
+        ps.AddCommand("Connect-ExchangeOnline")
+          .AddParameter("AppId", _appId)
+          .AddParameter("Organization", _org)
+          .AddParameter("CertificateThumbprint", _thumb)
+          .AddParameter("ShowBanner", false);
+
+        var result = ps.Invoke();
+        if (ps.HadErrors)
+        {
+            throw new Exception("Connect-ExchangeOnline failed: " +
+                                string.Join("; ", ps.Streams.Error.Select(e => e.ToString())));
+        }
+
+        return runspace;
+    }
+
+    public IEnumerable<PSObject> InvokeWithRetry(string command, Dictionary<string, object?> parameters)
+    {
+        int retries = 0;
+        int maxRetries = 5;
+
+        while (true)
+        {
+            try
+            {
+                using var runspace = CreateRunspace();
+                using var ps = PowerShell.Create();
+                ps.Runspace = runspace;
+
+                ps.AddCommand(command);
+                foreach (var kv in parameters)
+                    ps.AddParameter(kv.Key, kv.Value);
+
+                var result = ps.Invoke();
+
+                if (ps.HadErrors)
+                {
+                    throw new Exception(string.Join("; ", ps.Streams.Error.Select(e => e.ToString())));
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                if (retries >= maxRetries)
+                    throw;
+
+                if (!IsThrottlingError(ex))
+                    throw;
+
+                int delay = (int)Math.Pow(2, retries) * 2000;
+                Console.WriteLine($"THROTTLING: retry {retries + 1}/{maxRetries}, waiting {delay}ms");
+                Thread.Sleep(delay);
+
+                retries++;
+            }
+        }
+    }
+
+    private bool IsThrottlingError(Exception ex)
+    {
+        var msg = ex.ToString();
+
+        return msg.Contains("CmdletThrottlingException", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("TransientError", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("(429)", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("WinRMClientTransportException", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+
+---
+
+PermissionCollector.cs
+
+using System.Collections.Concurrent;
+using System.Management.Automation;
+using ExoPermDump.Models;
+
+namespace ExoPermDump;
+
+public class PermissionCollector
+{
+    private readonly ParallelExchangeClient _client;
+    private readonly List<MailboxPermissionSnapshot> _previousSnapshots;
+
+    public PermissionCollector(ParallelExchangeClient client,
+                               List<MailboxPermissionSnapshot> previousSnapshots)
+    {
+        _client = client;
+        _previousSnapshots = previousSnapshots;
+    }
+
+    public List<MailboxPermissionSnapshot> CollectMailboxSnapshots()
+    {
+        var mailboxes = GetAllMailboxes().ToList();
+        var total = mailboxes.Count;
+
+        var progress = new ProgressReporter(total);
+        var snapshots = new ConcurrentBag<MailboxPermissionSnapshot>();
+
+        var prevBySmtp = _previousSnapshots
+            .GroupBy(x => x.MailboxSmtp, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var batches = mailboxes
+            .Select((mbx, idx) => new { mbx, idx })
+            .GroupBy(x => x.idx / 300)
+            .Select(g => g.Select(x => x.mbx).ToList())
+            .ToList();
+
+        Parallel.ForEach(batches, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = 6
+        },
+        batch =>
+        {
+            foreach (var mbx in batch)
+            {
+                var smtp = mbx.Properties["PrimarySmtpAddress"]?.Value?.ToString() ?? string.Empty;
+                if (string.IsNullOrEmpty(smtp))
+                {
+                    progress.Tick();
+                    continue;
+                }
+
+                var whenChangedObj = mbx.Properties["WhenChanged"]?.Value;
+                DateTime? whenChanged = null;
+                if (whenChangedObj != null &&
+                    DateTime.TryParse(whenChangedObj.ToString(), out var dt))
+                {
+                    whenChanged = dt;
+                }
+
+                if (prevBySmtp.TryGetValue(smtp, out var prev)
+                    && prev.WhenChanged.HasValue
+                    && whenChanged.HasValue
+                    && prev.WhenChanged.Value == whenChanged.Value)
+                {
+                    snapshots.Add(prev);
+                    progress.Tick();
+                    continue;
+                }
+
+                var snapshot = new MailboxPermissionSnapshot
+                {
+                    MailboxSmtp = smtp,
+                    WhenChanged = whenChanged
+                };
+
+                snapshot.FullAccess.AddRange(GetFullAccess(smtp));
+                snapshot.SendAs.AddRange(GetSendAs(smtp));
+                snapshot.SendOnBehalf.AddRange(GetSendOnBehalf(mbx, smtp));
+
+                snapshots.Add(snapshot);
+                progress.Tick();
+            }
+        });
+
+        progress.Finish();
+        return snapshots.ToList();
+    }
+
+    private IEnumerable<PSObject> GetAllMailboxes()
+    {
+        return _client.InvokeWithRetry("Get-Mailbox", new Dictionary<string, object?>
+        {
+            { "ResultSize", "Unlimited" },
+            { "RecipientTypeDetails", "UserMailbox" }
+        });
+    }
+
+    private IEnumerable<MailboxPermissionEntry> GetFullAccess(string smtp)
+    {
+        var result = _client.InvokeWithRetry("Get-MailboxPermission", new Dictionary<string, object?>
+        {
+            { "Identity", smtp }
+        });
+
+        foreach (var r in result)
+        {
+            var user = r.Properties["User"]?.Value?.ToString() ?? "";
+            if (string.IsNullOrEmpty(user) || user == "NT AUTHORITY\\SELF")
+                continue;
+
+            yield return new MailboxPermissionEntry
+            {
+                MailboxSmtp = smtp,
+                Type = PermissionType.FullAccess,
+                GranteeUpn = user,
+                Rights = r.Properties["AccessRights"]?.Value?.ToString()
+            };
+        }
+    }
+
+    private IEnumerable<MailboxPermissionEntry> GetSendAs(string smtp)
+    {
+        var result = _client.InvokeWithRetry("Get-RecipientPermission", new Dictionary<string, object?>
+        {
+            { "Identity", smtp }
+        });
+
+        foreach (var r in result)
+        {
+            var trustee = r.Properties["Trustee"]?.Value?.ToString() ?? "";
+            if (string.IsNullOrEmpty(trustee))
+                continue;
+
+            yield return new MailboxPermissionEntry
+            {
+                MailboxSmtp = smtp,
+                Type = PermissionType.SendAs,
+                GranteeUpn = trustee,
+                Rights = r.Properties["AccessRights"]?.Value?.ToString()
+            };
+        }
+    }
+
+    private IEnumerable<MailboxPermissionEntry> GetSendOnBehalf(PSObject mailbox, string smtp)
+    {
+        var grant = mailbox.Properties["GrantSendOnBehalfTo"]?.Value;
+        if (grant is null) yield break;
+
+        if (grant is IEnumerable<object> coll)
+        {
+            foreach (var item in coll)
+            {
+                yield return new MailboxPermissionEntry
+                {
+                    MailboxSmtp = smtp,
+                    Type = PermissionType.SendOnBehalf,
+                    GranteeUpn = item?.ToString() ?? ""
+                };
+            }
+        }
+        else
+        {
+            yield return new MailboxPermissionEntry
+            {
+                MailboxSmtp = smtp,
+                Type = PermissionType.SendOnBehalf,
+                GranteeUpn = grant.ToString() ?? ""
+            };
+        }
+    }
+
+    public List<UserPermissionSnapshot> BuildUserSnapshots(IEnumerable<MailboxPermissionSnapshot> mailboxSnapshots)
+    {
+        var dict = new Dictionary<string, UserPermissionSnapshot>(StringComparer.OrdinalIgnoreCase);
+
+        void AddEntry(MailboxPermissionEntry entry)
+        {
+            if (!dict.TryGetValue(entry.GranteeUpn, out var userSnap))
+            {
+                userSnap = new UserPermissionSnapshot
+                {
+                    UserUpn = entry.GranteeUpn
+                };
+                dict[entry.GranteeUpn] = userSnap;
+            }
+
+            var userEntry = new UserPermissionEntry
+            {
+                UserUpn = entry.GranteeUpn,
+                Type = entry.Type,
+                TargetMailboxSmtp = entry.MailboxSmtp,
+                Rights = entry.Rights
+            };
