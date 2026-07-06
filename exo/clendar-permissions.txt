@@ -1,0 +1,199 @@
+Program.cs – Minimal API (bez zmian w kontrakcie)
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddScoped<ExchangePermissionJob>();
+builder.Services.AddScoped<ExchangeCalendarPermissionJob>();
+
+var app = builder.Build();
+
+app.MapGet("/permissions/{mailbox}", async (
+    string mailbox,
+    ExchangePermissionJob job) =>
+{
+    var result = await job.ExecuteAsync(mailbox);
+    return Results.Ok(result);
+});
+
+app.MapGet("/calendar-permissions/{mailbox}", async (
+    string mailbox,
+    ExchangeCalendarPermissionJob job) =>
+{
+    var result = await job.ExecuteAsync(mailbox);
+    return Results.Ok(result);
+});
+
+app.Run();
+
+
+---
+
+Wspólny helper – zoptymalizowany runspace + EXO
+
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+
+public static class ExchangeRunspaceFactory
+{
+    public static (Runspace runspace, PowerShell ps) Create(string tenantId, string appId, string certThumbprint)
+    {
+        var initial = InitialSessionState.CreateDefault2();
+        initial.ImportPSModule(new[] { "ExchangeOnlineManagement" });
+        initial.ApartmentState = System.Threading.ApartmentState.MTA;
+        initial.AuthorizationManager = new AuthorizationManager("Microsoft.PowerShell");
+        initial.ThrowOnRunspaceOpenError = true;
+
+        var runspace = RunspaceFactory.CreateRunspace(initial);
+        runspace.Open();
+
+        var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+
+        ps.AddCommand("Connect-ExchangeOnline")
+          .AddParameter("AppId", appId)
+          .AddParameter("Organization", tenantId)
+          .AddParameter("CertificateThumbprint", certThumbprint)
+          .AddParameter("ShowBanner", false);
+
+        ps.Invoke();
+        ps.Commands.Clear();
+
+        return (runspace, ps);
+    }
+}
+
+
+---
+
+Job 1 – pełne uprawnienia skrzynki (FullAccess, SendAs, SendOnBehalf)
+
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+
+public class ExchangePermissionJob
+{
+    private readonly IConfiguration _config;
+
+    public ExchangePermissionJob(IConfiguration config)
+    {
+        _config = config;
+    }
+
+    public async Task<object> ExecuteAsync(string mailbox)
+    {
+        var tenantId = _config["EXO:TenantId"];
+        var appId = _config["EXO:AppId"];
+        var certificateThumbprint = _config["EXO:CertThumbprint"];
+
+        var (runspace, ps) = ExchangeRunspaceFactory.Create(tenantId!, appId!, certificateThumbprint!);
+
+        try
+        {
+            // FullAccess
+            ps.Commands.Clear();
+            ps.AddCommand("Get-MailboxPermission")
+              .AddParameter("Identity", mailbox);
+
+            var fullAccess = await Task.Run(() => ps.Invoke());
+
+            // SendAs
+            ps.Commands.Clear();
+            ps.AddCommand("Get-RecipientPermission")
+              .AddParameter("Identity", mailbox);
+
+            var sendAs = await Task.Run(() => ps.Invoke());
+
+            // SendOnBehalf – tylko potrzebna właściwość
+            ps.Commands.Clear();
+            ps.AddCommand("Get-Mailbox")
+              .AddParameter("Identity", mailbox)
+              .AddParameter("Properties", "GrantSendOnBehalfTo");
+
+            var sob = await Task.Run(() => ps.Invoke());
+
+            var sendOnBehalf = sob
+                .Select(x => x.Properties["GrantSendOnBehalfTo"].Value)
+                .FirstOrDefault();
+
+            return new
+            {
+                Mailbox = mailbox,
+                FullAccess = fullAccess.Select(x => new
+                {
+                    User = x.Properties["User"].Value?.ToString(),
+                    AccessRights = x.Properties["AccessRights"].Value,
+                    IsInherited = x.Properties["IsInherited"].Value
+                }),
+                SendAs = sendAs.Select(x => new
+                {
+                    Trustee = x.Properties["Trustee"].Value?.ToString(),
+                    AccessRights = x.Properties["AccessRights"].Value
+                }),
+                SendOnBehalf = sendOnBehalf
+            };
+        }
+        finally
+        {
+            ps.Dispose();
+            runspace.Dispose();
+        }
+    }
+}
+
+
+---
+
+Job 2 – uprawnienia kalendarza (niewrażliwe na język, Calendar)
+
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+
+public class ExchangeCalendarPermissionJob
+{
+    private readonly IConfiguration _config;
+
+    public ExchangeCalendarPermissionJob(IConfiguration config)
+    {
+        _config = config;
+    }
+
+    public async Task<object> ExecuteAsync(string mailbox)
+    {
+        var tenantId = _config["EXO:TenantId"];
+        var appId = _config["EXO:AppId"];
+        var certificateThumbprint = _config["EXO:CertThumbprint"];
+
+        var (runspace, ps) = ExchangeRunspaceFactory.Create(tenantId!, appId!, certificateThumbprint!);
+
+        try
+        {
+            ps.Commands.Clear();
+            ps.AddCommand("Get-MailboxFolderPermission")
+              .AddParameter("Identity", $"{mailbox}:\\Calendar");
+
+            var calendarPerms = await Task.Run(() => ps.Invoke());
+
+            var result = calendarPerms.Select(x => new
+            {
+                User = x.Properties["User"].Value?.ToString(),
+                AccessRights = x.Properties["AccessRights"].Value,
+                SharingPermissionFlags = x.Properties["SharingPermissionFlags"].Value
+            });
+
+            return new
+            {
+                Mailbox = mailbox,
+                Folder = "Calendar",
+                Permissions = result
+            };
+        }
+        finally
+        {
+            ps.Dispose();
+            runspace.Dispose();
+        }
+    }
+}
+
+
+Jeśli chcesz, w kolejnym kroku mogę dorzucić prosty benchmark czasu startu runspace i Connect‑ExchangeOnline, żebyś miał liczby z Twojego środowiska.
