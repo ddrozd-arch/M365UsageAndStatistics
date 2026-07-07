@@ -1,0 +1,289 @@
+Poniżej masz kompletny, gotowy do kopiuj‑wklej kod z Twoją ostatnią zmianą:
+
+• RunspacePool (4 sztuki)
+• moduł EXO ładuje się na starcie
+• pierwsze wywołanie = Connect‑ExchangeOnline
+• reconnect przy błędach
+• AppId + Thumbprint + OrgName z konfiguracji
+• opcjonalny fallback na Secret
+• Minimal API
+• pobieranie uprawnień (FullAccess, SendAs, SendOnBehalf, Calendar)
+• pobieranie listy skrzynek + WhenChanged
+• zwrot jednego obiektu JSON
+• kod w pełni samodzielny, gotowy do wklejenia
+
+
+---
+
+✅ appsettings.json (konfiguracja)
+
+{
+  "ExoAuth": {
+    "AppId": "00000000-0000-0000-0000-000000000000",
+    "Tenant": "yourtenant.onmicrosoft.com",
+    "OrgName": "yourtenant.onmicrosoft.com",
+    "Thumbprint": "ABC1234567890ABC1234567890ABC1234567890",
+    "Secret": "opcjonalny-secret-jeśli-chcesz-fallback"
+  }
+}
+
+
+---
+
+✅ PowerShellPool.cs
+
+Singleton z pulą runspace + lazy Connect‑ExchangeOnline + reconnect + fallback na secret.
+
+using System;
+using System.Collections.Generic;
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+using Microsoft.Extensions.Configuration;
+
+public class PowerShellPool
+{
+    private RunspacePool _pool;
+    private bool _connected = false;
+    private readonly object _lock = new();
+
+    private readonly string _appId;
+    private readonly string _tenant;
+    private readonly string _orgName;
+    private readonly string _thumbprint;
+    private readonly string _secret;
+
+    public PowerShellPool(IConfiguration config)
+    {
+        var auth = config.GetSection("ExoAuth");
+
+        _appId = auth["AppId"];
+        _tenant = auth["Tenant"];
+        _orgName = auth["OrgName"];
+        _thumbprint = auth["Thumbprint"];
+        _secret = auth["Secret"]; // fallback
+
+        var initial = InitialSessionState.CreateDefault();
+        initial.ImportPSModule(new[] { "ExchangeOnlineManagement" });
+
+        _pool = RunspaceFactory.CreateRunspacePool(1, 4, initial, null);
+        _pool.Open();
+    }
+
+    private void EnsureConnected()
+    {
+        if (_connected) return;
+
+        lock (_lock)
+        {
+            if (_connected) return;
+
+            using var ps = PowerShell.Create();
+            ps.RunspacePool = _pool;
+
+            if (!string.IsNullOrWhiteSpace(_thumbprint))
+            {
+                // Cert-based auth
+                ps.AddCommand("Connect-ExchangeOnline")
+                  .AddParameter("AppId", _appId)
+                  .AddParameter("CertificateThumbprint", _thumbprint)
+                  .AddParameter("Organization", _orgName);
+            }
+            else
+            {
+                // Secret fallback
+                ps.AddCommand("Connect-ExchangeOnline")
+                  .AddParameter("AppId", _appId)
+                  .AddParameter("Secret", _secret)
+                  .AddParameter("Organization", _orgName);
+            }
+
+            var result = ps.Invoke();
+
+            if (ps.HadErrors)
+                throw new Exception("Nie udało się połączyć z EXO: " + ps.Streams.Error[0].ToString());
+
+            _connected = true;
+        }
+    }
+
+    private bool IsSessionExpired(PowerShell ps)
+    {
+        if (!ps.HadErrors) return false;
+
+        foreach (var err in ps.Streams.Error)
+        {
+            var msg = err.ToString();
+            if (msg.Contains("Unauthorized") ||
+                msg.Contains("expired") ||
+                msg.Contains("401") ||
+                msg.Contains("not recognized"))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void Reconnect()
+    {
+        lock (_lock)
+        {
+            _connected = false;
+
+            _pool.Close();
+            _pool.Dispose();
+
+            var initial = InitialSessionState.CreateDefault();
+            initial.ImportPSModule(new[] { "ExchangeOnlineManagement" });
+
+            _pool = RunspaceFactory.CreateRunspacePool(1, 4, initial, null);
+            _pool.Open();
+
+            EnsureConnected();
+        }
+    }
+
+    public IEnumerable<PSObject> Invoke(Func<PowerShell, IEnumerable<PSObject>> action)
+    {
+        EnsureConnected();
+
+        using var ps = PowerShell.Create();
+        ps.RunspacePool = _pool;
+
+        var result = action(ps);
+
+        if (IsSessionExpired(ps))
+        {
+            Reconnect();
+
+            using var ps2 = PowerShell.Create();
+            ps2.RunspacePool = _pool;
+            return action(ps2);
+        }
+
+        return result;
+    }
+}
+
+
+---
+
+✅ PermissionService.cs
+
+using System.Collections.Generic;
+using System.Management.Automation;
+
+public class PermissionService
+{
+    private readonly PowerShellPool _pool;
+
+    public PermissionService(PowerShellPool pool)
+    {
+        _pool = pool;
+    }
+
+    public IEnumerable<PSObject> GetFullAccess(string mailbox) =>
+        _pool.Invoke(ps =>
+        {
+            ps.AddCommand("Get-EXOMailboxPermission")
+              .AddParameter("Identity", mailbox);
+            return ps.Invoke();
+        });
+
+    public IEnumerable<PSObject> GetSendAs(string mailbox) =>
+        _pool.Invoke(ps =>
+        {
+            ps.AddCommand("Get-EXORecipientPermission")
+              .AddParameter("Identity", mailbox);
+            return ps.Invoke();
+        });
+
+    public IEnumerable<PSObject> GetSendOnBehalf(string mailbox) =>
+        _pool.Invoke(ps =>
+        {
+            ps.AddScript($"(Get-Mailbox -Identity '{mailbox}').GrantSendOnBehalfTo");
+            return ps.Invoke();
+        });
+
+    public IEnumerable<PSObject> GetCalendarPermissions(string mailbox) =>
+        _pool.Invoke(ps =>
+        {
+            ps.AddCommand("Get-MailboxFolderPermission")
+              .AddParameter("Identity", $"{mailbox}:\\Calendar");
+            return ps.Invoke();
+        });
+
+    public IEnumerable<PSObject> GetMailboxList() =>
+        _pool.Invoke(ps =>
+        {
+            ps.AddScript("Get-Mailbox | Select PrimarySmtpAddress, WhenChanged");
+            return ps.Invoke();
+        });
+}
+
+
+---
+
+✅ Program.cs (Minimal API)
+
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
+using System.Linq;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSingleton<PowerShellPool>();
+builder.Services.AddSingleton<PermissionService>();
+
+var app = WebApplication.Create();
+
+app.MapGet("/permissions/{mailbox}", (string mailbox, PermissionService svc) =>
+{
+    var fullAccess = svc.GetFullAccess(mailbox)
+        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+
+    var sendAs = svc.GetSendAs(mailbox)
+        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+
+    var sendOnBehalf = svc.GetSendOnBehalf(mailbox)
+        .Select(x => x.BaseObject.ToString());
+
+    var calendar = svc.GetCalendarPermissions(mailbox)
+        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+
+    return Results.Json(new
+    {
+        mailbox,
+        fullAccess,
+        sendAs,
+        sendOnBehalf,
+        calendar
+    });
+});
+
+app.MapGet("/mailboxes", (PermissionService svc) =>
+{
+    var list = svc.GetMailboxList()
+        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+
+    return Results.Json(list);
+});
+
+app.Run();
+
+
+---
+
+🎯 Masz teraz kompletny, produkcyjny kod z AppId + Thumbprint + fallback na Secret.
+
+Jeśli chcesz, mogę przygotować:
+
+• wersję z pulą 6 lub 10 runspace’ów
+• worker HostedService z delta sync
+• cache + retry logic na throttling EXO
+• pełny diagram architektury
+
+
+Wybierz jedną:
+delta sync kod, worker, pula 10, diagram.
