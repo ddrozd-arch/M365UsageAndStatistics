@@ -1,289 +1,246 @@
-Poniżej masz kompletny, gotowy do kopiuj‑wklej kod z Twoją ostatnią zmianą:
+Najpierw dostajesz jedno, zwarte, konkretne podsumowanie całej architektury, od pierwszej decyzji po finalny model.
+Potem — gotowy prompt, który możesz wkleić do Copilot M365, żeby wygenerował Ci pełny kod .NET 8.
 
-• RunspacePool (4 sztuki)
-• moduł EXO ładuje się na starcie
-• pierwsze wywołanie = Connect‑ExchangeOnline
-• reconnect przy błędach
-• AppId + Thumbprint + OrgName z konfiguracji
-• opcjonalny fallback na Secret
-• Minimal API
-• pobieranie uprawnień (FullAccess, SendAs, SendOnBehalf, Calendar)
-• pobieranie listy skrzynek + WhenChanged
-• zwrot jednego obiektu JSON
-• kod w pełni samodzielny, gotowy do wklejenia
+---
+
+🧩 PODSUMOWANIE — CAŁA ARCHITEKTURA OD A DO Z
+
+1️⃣ Problem bazowy
+
+Twoje API odpytuje EXO o FullAccess (Get-MailboxPermission).
+Przy skrzynkach z dużą liczbą delegatów (np. 400) EXO:
+
+• działa wolno,
+• potrafi wisieć 30–120 sekund,
+• powoduje timeouty po stronie API / IIS / HttpClient.
+
+
+RunspacePool odpada — nie chcesz go używać.
+
+---
+
+2️⃣ Cel
+
+Zbudować architekturę, która:
+
+• nie timeoutuje,
+• nie blokuje API,
+• nie wymaga bazy danych,
+• jest lekka,
+• ma 4 równoległe workery,
+• waliduje skrzynkę przed startem,
+• zapisuje wyniki tylko do plików,
+• czyści pliki raz dziennie,
+• jest gotowa do implementacji w .NET 8.
 
 
 ---
 
-✅ appsettings.json (konfiguracja)
+3️⃣ Walidacja skrzynki przed utworzeniem joba
+
+Najlepsza metoda: Microsoft Graph – mailboxSettings.
+
+GET /users/{UPN}/mailboxSettings
+
+
+Interpretacja:
+
+• 200 OK → skrzynka istnieje w EXO
+• 404 → literówka / skrzynka on-prem / brak licencji EXO
+• 403 → brak licencji EXO
+• 401 → brak uprawnień tokenu
+
+
+Dlaczego to jest idealne?
+
+• szybkie (1–2 ms),
+• lekkie,
+• nie wymaga EXO sesji,
+• nie generuje throttlingu,
+• pewnie wykrywa on-prem.
+
+
+Worker nigdy nie dostaje joba dla skrzynki, która nie istnieje w EXO.
+
+---
+
+4️⃣ API — rola minimalna
+
+API nie wykonuje EXO.
+API robi tylko:
+
+1. Walidację skrzynki przez Graph.
+2. Tworzy job.
+3. Zapisuje job do pliku.
+4. Wrzuca job do kolejki.
+5. Zwraca jobId.
+
+
+API jest natychmiastowe → zero timeoutów.
+
+---
+
+5️⃣ Struktura joba
+
+Idealny model:
 
 {
-  "ExoAuth": {
-    "AppId": "00000000-0000-0000-0000-000000000000",
-    "Tenant": "yourtenant.onmicrosoft.com",
-    "OrgName": "yourtenant.onmicrosoft.com",
-    "Thumbprint": "ABC1234567890ABC1234567890ABC1234567890",
-    "Secret": "opcjonalny-secret-jeśli-chcesz-fallback"
-  }
+  "id": "A7F3",
+  "user": "dawid@firma.com",
+  "name": "permissions for mailbox shared@firma.com",
+  "created": "2026-07-08T20:33:00Z",
+  "status": "Pending",
+  "resultPath": "jobs/A7F3.json"
 }
 
 
----
+Pola:
 
-✅ PowerShellPool.cs
-
-Singleton z pulą runspace + lazy Connect‑ExchangeOnline + reconnect + fallback na secret.
-
-using System;
-using System.Collections.Generic;
-using System.Management.Automation;
-using System.Management.Automation.Runspaces;
-using Microsoft.Extensions.Configuration;
-
-public class PowerShellPool
-{
-    private RunspacePool _pool;
-    private bool _connected = false;
-    private readonly object _lock = new();
-
-    private readonly string _appId;
-    private readonly string _tenant;
-    private readonly string _orgName;
-    private readonly string _thumbprint;
-    private readonly string _secret;
-
-    public PowerShellPool(IConfiguration config)
-    {
-        var auth = config.GetSection("ExoAuth");
-
-        _appId = auth["AppId"];
-        _tenant = auth["Tenant"];
-        _orgName = auth["OrgName"];
-        _thumbprint = auth["Thumbprint"];
-        _secret = auth["Secret"]; // fallback
-
-        var initial = InitialSessionState.CreateDefault();
-        initial.ImportPSModule(new[] { "ExchangeOnlineManagement" });
-
-        _pool = RunspaceFactory.CreateRunspacePool(1, 4, initial, null);
-        _pool.Open();
-    }
-
-    private void EnsureConnected()
-    {
-        if (_connected) return;
-
-        lock (_lock)
-        {
-            if (_connected) return;
-
-            using var ps = PowerShell.Create();
-            ps.RunspacePool = _pool;
-
-            if (!string.IsNullOrWhiteSpace(_thumbprint))
-            {
-                // Cert-based auth
-                ps.AddCommand("Connect-ExchangeOnline")
-                  .AddParameter("AppId", _appId)
-                  .AddParameter("CertificateThumbprint", _thumbprint)
-                  .AddParameter("Organization", _orgName);
-            }
-            else
-            {
-                // Secret fallback
-                ps.AddCommand("Connect-ExchangeOnline")
-                  .AddParameter("AppId", _appId)
-                  .AddParameter("Secret", _secret)
-                  .AddParameter("Organization", _orgName);
-            }
-
-            var result = ps.Invoke();
-
-            if (ps.HadErrors)
-                throw new Exception("Nie udało się połączyć z EXO: " + ps.Streams.Error[0].ToString());
-
-            _connected = true;
-        }
-    }
-
-    private bool IsSessionExpired(PowerShell ps)
-    {
-        if (!ps.HadErrors) return false;
-
-        foreach (var err in ps.Streams.Error)
-        {
-            var msg = err.ToString();
-            if (msg.Contains("Unauthorized") ||
-                msg.Contains("expired") ||
-                msg.Contains("401") ||
-                msg.Contains("not recognized"))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void Reconnect()
-    {
-        lock (_lock)
-        {
-            _connected = false;
-
-            _pool.Close();
-            _pool.Dispose();
-
-            var initial = InitialSessionState.CreateDefault();
-            initial.ImportPSModule(new[] { "ExchangeOnlineManagement" });
-
-            _pool = RunspaceFactory.CreateRunspacePool(1, 4, initial, null);
-            _pool.Open();
-
-            EnsureConnected();
-        }
-    }
-
-    public IEnumerable<PSObject> Invoke(Func<PowerShell, IEnumerable<PSObject>> action)
-    {
-        EnsureConnected();
-
-        using var ps = PowerShell.Create();
-        ps.RunspacePool = _pool;
-
-        var result = action(ps);
-
-        if (IsSessionExpired(ps))
-        {
-            Reconnect();
-
-            using var ps2 = PowerShell.Create();
-            ps2.RunspacePool = _pool;
-            return action(ps2);
-        }
-
-        return result;
-    }
-}
+• id — 4–8 znaków (Base32/Base36/small GUID)
+• user — z HttpContext
+• name — opis operacji
+• created — timestamp
+• status — Pending, Running, Completed, Failed
+• resultPath — ścieżka do pliku z wynikiem
 
 
 ---
 
-✅ PermissionService.cs
+6️⃣ Kolejka jobów
 
-using System.Collections.Generic;
-using System.Management.Automation;
+Najlepsze rozwiązanie: Channel w .NET 8.
 
-public class PermissionService
-{
-    private readonly PowerShellPool _pool;
+Dlaczego?
 
-    public PermissionService(PowerShellPool pool)
-    {
-        _pool = pool;
-    }
-
-    public IEnumerable<PSObject> GetFullAccess(string mailbox) =>
-        _pool.Invoke(ps =>
-        {
-            ps.AddCommand("Get-EXOMailboxPermission")
-              .AddParameter("Identity", mailbox);
-            return ps.Invoke();
-        });
-
-    public IEnumerable<PSObject> GetSendAs(string mailbox) =>
-        _pool.Invoke(ps =>
-        {
-            ps.AddCommand("Get-EXORecipientPermission")
-              .AddParameter("Identity", mailbox);
-            return ps.Invoke();
-        });
-
-    public IEnumerable<PSObject> GetSendOnBehalf(string mailbox) =>
-        _pool.Invoke(ps =>
-        {
-            ps.AddScript($"(Get-Mailbox -Identity '{mailbox}').GrantSendOnBehalfTo");
-            return ps.Invoke();
-        });
-
-    public IEnumerable<PSObject> GetCalendarPermissions(string mailbox) =>
-        _pool.Invoke(ps =>
-        {
-            ps.AddCommand("Get-MailboxFolderPermission")
-              .AddParameter("Identity", $"{mailbox}:\\Calendar");
-            return ps.Invoke();
-        });
-
-    public IEnumerable<PSObject> GetMailboxList() =>
-        _pool.Invoke(ps =>
-        {
-            ps.AddScript("Get-Mailbox | Select PrimarySmtpAddress, WhenChanged");
-            return ps.Invoke();
-        });
-}
+• thread-safe,
+• szybkie,
+• lekkie,
+• idealne dla workerów.
 
 
 ---
 
-✅ Program.cs (Minimal API)
+7️⃣ Workery — 4 sztuki
 
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Configuration;
-using System.Linq;
+Każdy worker:
 
-var builder = WebApplication.CreateBuilder(args);
+• czeka na job,
+• ustawia status = Running,
+• tworzy sesję EXO V3,
+• wykonuje Get-MailboxPermission,
+• zapisuje wynik do pliku,
+• ustawia status = Completed.
 
-builder.Services.AddSingleton<PowerShellPool>();
-builder.Services.AddSingleton<PermissionService>();
 
-var app = WebApplication.Create();
+Czy worker obciąża zasoby, gdy nic nie robi?
 
-app.MapGet("/permissions/{mailbox}", (string mailbox, PermissionService svc) =>
-{
-    var fullAccess = svc.GetFullAccess(mailbox)
-        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+Nie.
 
-    var sendAs = svc.GetSendAs(mailbox)
-        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+Worker jest „pusty”, dopóki nie dostanie joba.
 
-    var sendOnBehalf = svc.GetSendOnBehalf(mailbox)
-        .Select(x => x.BaseObject.ToString());
+Obciążenie pojawia się tylko podczas:
 
-    var calendar = svc.GetCalendarPermissions(mailbox)
-        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+• tworzenia sesji EXO,
+• wykonywania cmdletu,
+• zapisu pliku.
 
-    return Results.Json(new
-    {
-        mailbox,
-        fullAccess,
-        sendAs,
-        sendOnBehalf,
-        calendar
-    });
-});
 
-app.MapGet("/mailboxes", (PermissionService svc) =>
-{
-    var list = svc.GetMailboxList()
-        .Select(x => x.Properties.ToDictionary(p => p.Name, p => p.Value));
+4 workery to bezpieczna liczba dla EXO throttling.
 
-    return Results.Json(list);
-});
+---
 
-app.Run();
+8️⃣ Pliki zamiast bazy
+
+Struktura katalogów:
+
+/jobs
+    A7F3.json
+    B9D2.json
+/jobhistory.json
+
+
+Czyszczenie:
+
+• raz dziennie o północy,
+• albo po X godzinach.
+
+
+To jest lekki, prosty i wystarczający mechanizm.
+
+---
+
+9️⃣ Endpointy API
+
+`POST /mailbox/{id}/permissions`
+
+• walidacja Graph
+• tworzenie joba
+• zapis joba
+• wrzucenie joba do kolejki
+• zwrot jobId
+
+
+`GET /jobs/{jobId}`
+
+• odczyt pliku joba
+• zwrot statusu
+• jeśli Completed → zwrot wyniku
 
 
 ---
 
-🎯 Masz teraz kompletny, produkcyjny kod z AppId + Thumbprint + fallback na Secret.
+🔟 Efekt końcowy
 
-Jeśli chcesz, mogę przygotować:
+Masz architekturę, która:
 
-• wersję z pulą 6 lub 10 runspace’ów
-• worker HostedService z delta sync
-• cache + retry logic na throttling EXO
-• pełny diagram architektury
+• nie timeoutuje,
+• nie blokuje API,
+• nie wymaga bazy,
+• jest lekka,
+• ma 4 workerów,
+• waliduje skrzynkę przez Graph,
+• zapisuje wyniki do plików,
+• czyści pliki raz dziennie,
+• jest gotowa do implementacji w .NET 8.
 
 
-Wybierz jedną:
-delta sync kod, worker, pula 10, diagram.
+To jest idealny model dla Twojego scenariusza.
+
+---
+
+🧩 GOTOWY PROMPT DO COPILOT M365
+
+Możesz wkleić 1:1:
+
+Chcę pełną implementację architektury typu „job queue + async worker” dla pobierania FullAccess z Exchange Online (EXO V3) w .NET 8.Założenia:• API nie wykonuje EXO, tylko tworzy joby.
+• Walidacja skrzynki ma być wykonana przez Microsoft Graph: GET /users/{UPN}/mailboxSettings.
+• Jeśli Graph zwróci 200 OK → skrzynka istnieje w EXO.
+• Jeśli zwróci 404 → literówka / skrzynka on-prem / brak licencji EXO → API ma zwrócić błąd i nie tworzyć joba.
+• Job ma mieć strukturę:• id (4–8 znaków),
+• user (z HttpContext),
+• name (opis operacji),
+• created (timestamp),
+• status (Pending, Running, Completed, Failed),
+• resultPath (ścieżka do pliku z wynikiem).
+
+• Joby i wyniki mają być zapisywane do plików JSON w katalogu /jobs.
+• jobhistory.json ma być aktualizowany przy każdym jobie i czyszczony raz dziennie.
+• Chcę 4 równoległe workery korzystające z Channel.
+• Worker ma wykonywać EXO V3 (Get-MailboxPermission) i zapisywać wynik do pliku.
+• API ma mieć endpointy:• POST /mailbox/{id}/permissions → tworzy job i zwraca jobId
+• GET /jobs/{jobId} → zwraca status i wynik
+
+Proszę o pełny kod .NET 8 minimal API + Graph client + EXO V3 client + kolejka + workery + zapis do plików + obsługa statusów.
+
+---
+
+Jeśli chcesz, mogę teraz:
+
+• rozwinąć model joba,
+• rozwinąć workflow workerów,
+• rozwinąć logikę walidacji Graph,
+• rozwinąć retry/backoff dla EXO V3,
+• rozwinąć strukturę plików i katalogów.
+
+
+Wybierz kierunek — poprowadzę dalej.
