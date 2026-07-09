@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8" />
+    <title>M365 Operations Hub – Strona startowa</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        :root {
+            --m365-blue: #0078D4;
+            --bg-light: #F3F2F1;
+            --text-dark: #323130;
+            --card-bg: #ffffff;
+            --border-light: #E1DFDD;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg-light);
+            color: var(--text-dark);
+        }
+
+        /* TOPBAR */
+        .topbar {
+            width: 100%;
+            background: #E1DFDD; /* Fluent UI neutral gray */
+            color: #323130;
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 4px solid #0078D4; /* Accent */
+        }
+
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .topbar-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: #0078D4;
+        }
+
+        .topbar-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .topbar-right {
+            font-size: 14px;
+            font-weight: 500;
+            color: #605E5C;
+        }
+
+        .topbar-user {
+            padding: 6px 12px;
+            background: #ffffff;
+            border-radius: 4px;
+            border: 1px solid #C8C6C4;
+        }
+
+        /* PAGE */
+        .page {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* BANNER */
+        .banner {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid var(--border-light);
+            margin-bottom: 24px;
+        }
+
+        .banner-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .banner-subtitle {
+            font-size: 14px;
+            color: #605E5C;
+            margin-bottom: 12px;
+        }
+
+        .banner-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            font-size: 13px;
+            color: #605E5C;
+        }
+
+        .banner-meta-item span {
+            font-weight: 600;
+            color: var(--text-dark);
+        }
+
+        /* SECTIONS */
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .section {
+            margin-bottom: 24px;
+        }
+
+        /* STATUS GRID */
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .status-card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 14px;
+            border: 1px solid var(--border-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .status-name {
+            font-weight: 500;
+        }
+
+        .status-pill {
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-ok {
+            background: #DFF6DD;
+            color: #107C10;
+        }
+
+        .status-degraded {
+            background: #FFF4CE;
+            color: #8A6A0A;
+        }
+
+        .status-maint {
+            background: #E5E5F1;
+            color: #3B3A9A;
+        }
+
+        /* MODULES */
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+        }
+
+        .module-card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 18px;
+            border: 1px solid var(--border-light);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .module-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .module-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .module-tag {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-light);
+            color: #605E5C;
+        }
+
+        .module-desc {
+            font-size: 13px;
+            color: #605E5C;
+        }
+
+        .module-actions {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .btn-primary {
+            background: var(--m365-blue);
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .btn-primary:hover {
+            background: #106EBE;
+        }
+
+        /* FOOTER */
+        .footer {
+            font-size: 12px;
+            color: #605E5C;
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            border-top: 1px solid var(--border-light);
+            padding-top: 12px;
+            margin-top: 12px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 12px;
+        }
+
+        .footer a {
+            color: var(--m365-blue);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+
+<!-- TOPBAR -->
+<header class="topbar">
+    <div class="topbar-left">
+        <div class="topbar-icon"></div>
+        <span class="topbar-title">M365 Operations Hub</span>
+    </div>
+
+    <div class="topbar-right">
+        <span class="topbar-user">dawid.kowalski@firma.pl</span>
+    </div>
+</header>
+
+<div class="page">
+
+    <!-- WELCOME BANNER -->
+    <section class="banner">
+        <div class="banner-title">Witaj w M365 Operations Hub</div>
+        <div class="banner-subtitle">
+            Zarządzaj i analizuj zasoby Microsoft 365 w jednym miejscu.
+        </div>
+        <div class="banner-meta">
+            <div class="banner-meta-item">
+                <span>Użytkownik:</span> Dawid Kowalski
+            </div>
+            <div class="banner-meta-item">
+                <span>Data:</span> 09.07.2026
+            </div>
+            <div class="banner-meta-item">
+                <span>Godzina:</span> 23:27
+            </div>
+        </div>
+    </section>
+
+    <!-- SYSTEM STATUS -->
+    <section class="section">
+        <div class="section-title">Status usług</div>
+        <div class="status-grid">
+            <div class="status-card">
+                <div class="status-name">Graph API</div>
+                <div class="status-pill status-ok">OK</div>
+            </div>
+            <div class="status-card">
+                <div class="status-name">Exchange Online</div>
+                <div class="status-pill status-degraded">Degraded</div>
+            </div>
+            <div class="status-card">
+                <div class="status-name">Teams API</div>
+                <div class="status-pill status-maint">Maintenance</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- QUICK ACCESS MODULES -->
+    <section class="section">
+        <div class="section-title">Szybki dostęp</div>
+        <div class="modules-grid">
+
+            <!-- M365 Collector -->
+            <article class="module-card">
+                <div class="module-header">
+                    <div class="module-title">M365 Collector</div>
+                    <div class="module-tag">Data collection</div>
+                </div>
+                <div class="module-desc">
+                    Zbieranie danych z usług Microsoft 365 na potrzeby analizy i raportowania.
+                </div>
+                <div class="module-actions">
+                    <button class="btn-primary">Przejdź do modułu</button>
+                </div>
+            </article>
+
+            <!-- EXO Tools -->
+            <article class="module-card">
+                <div class="module-header">
+                    <div class="module-title">EXO Tools</div>
+                    <div class="module-tag">Exchange Online</div>
+                </div>
+                <div class="module-desc">
+                    Narzędzia operacyjne dla Exchange Online, w tym analiza uprawnień i operacje na skrzynkach.
+                </div>
+                <div class="module-actions">
+                    <button class="btn-primary">Przejdź do modułu</button>
+                </div>
+            </article>
+
+            <!-- Teams Tool -->
+            <article class="module-card">
+                <div class="module-header">
+                    <div class="module-title">Teams Tool</div>
+                    <div class="module-tag">Microsoft Teams</div>
+                </div>
+                <div class="module-desc">
+                    Operacje i analizy dla zespołów i kanałów w Microsoft Teams.
+                </div>
+                <div class="module-actions">
+                    <button class="btn-primary">Przejdź do modułu</button>
+                </div>
+            </article>
+
+        </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        <div>
+            © 2026 M365 Operations Hub · Wersja aplikacji: <strong>1.4.2</strong>
+        </div>
+        <div class="footer-links">
+            <a href="#">Dokumentacja</a>
+            <a href="#">Kontakt / Helpdesk</a>
+        </div>
+    </footer>
+
+</div>
+</body>
+</html>
